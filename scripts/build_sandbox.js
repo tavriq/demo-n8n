@@ -65,8 +65,9 @@ for (const f of resultFiles.reverse()) {
     category: s.accuracy.category,
     urgency: s.accuracy.urgency,
     needs_human: { recall: s.needs_human.recall, precision: s.needs_human.precision },
-    city: s.accuracy.city,
-    budget: s.accuracy.budget_rub,
+    // город и бюджет — с допустимыми вариантами написания («Ростов» = «Ростов-на-Дону»), как в evals/latest.md
+    city: s.accuracy.city.lenient,
+    budget: s.accuracy.budget_rub.lenient,
     pii: s.pii,
     injection: s.injection,
     contract_ok: s.contract_ok,
