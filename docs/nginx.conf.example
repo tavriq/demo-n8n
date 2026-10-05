@@ -1,0 +1,73 @@
+# Пример публичного адреса демо через nginx. Не применялся и не проверялся на живом
+# сервере: в репозитории прокси нет, n8n слушает только 127.0.0.1:18102.
+#
+# До публикации:
+#   1. Через ssh-туннель создать аккаунт владельца n8n (первый, кто откроет редактор,
+#      становится владельцем). Редактор наружу не публиковать.
+#   2. В /opt/demos/n8n/.env: TRUST_PROXY_HEADER=x-real-ip, WEBHOOK_URL=https://demo.example.com/,
+#      N8N_PROXY_HOPS=1; затем scripts/deploy.sh.
+#
+# Наружу открыты только форма, страница результата и доска. POST /webhook/triage
+# (API для evals и smoke) и редактор не публикуются.
+
+# --- в блоке http {} ---
+limit_req_zone  $binary_remote_addr zone=demo_req:10m rate=2r/s;
+limit_conn_zone $binary_remote_addr zone=demo_conn:10m;
+proxy_cache_path /var/cache/nginx/demo_board levels=1 keys_zone=demo_board:1m max_size=10m inactive=10m;
+
+# --- server ---
+server {
+    listen 443 ssl;
+    server_name demo.example.com;
+    # ssl_certificate     /etc/letsencrypt/live/demo.example.com/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/demo.example.com/privkey.pem;
+
+    # заявка до 1000 символов; multipart n8n сам ограничивает только файлы
+    client_max_body_size 16k;
+    limit_conn demo_conn 4;
+
+    proxy_set_header Host              $host;
+    # перезапись, а не проброс: значение от клиента сюда не доходит
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # токен прогонов снимает лимиты в час: снаружи его не принимаем
+    proxy_set_header X-Eval-Token      "";
+
+    # доска: каждый GET в n8n — исполнение в общей очереди (одно за раз),
+    # поэтому кэш на 20 секунд и лимит частоты
+    location = /webhook/board {
+        limit_except GET { deny all; }
+        limit_req zone=demo_req burst=10 nodelay;
+        proxy_cache demo_board;
+        proxy_cache_valid 200 20s;
+        proxy_ignore_headers Cache-Control Expires Set-Cookie;
+        proxy_cache_lock on;
+        proxy_cache_use_stale updating error timeout;
+        proxy_pass http://127.0.0.1:18102;
+    }
+
+    # форма и её POST
+    location /form/ {
+        limit_req zone=demo_req burst=10 nodelay;
+        proxy_pass http://127.0.0.1:18102;
+    }
+
+    # страница результата; браузер опрашивает .../n8n-execution-status
+    location /form-waiting/ {
+        limit_req zone=demo_req burst=20 nodelay;
+        proxy_pass http://127.0.0.1:18102;
+    }
+
+    location / {
+        return 404;
+    }
+}
+
+# Другие прокси. Caddy и Cloudflare Tunnel (cloudflared) не перезаписывают X-Real-IP,
+# который прислал клиент, поэтому TRUST_PROXY_HEADER=x-real-ip с ними не ставить:
+#   - Cloudflare: TRUST_PROXY_HEADER=cf-connecting-ip (заголовок ставит Cloudflare);
+#   - Caddy: xff-last, если Caddy не доверяет X-Forwarded-For клиента (trusted_proxies
+#     не настроен); проверить по документации своей версии.
+# Если цепочка из двух прокси (CDN -> nginx), последний адрес X-Forwarded-For окажется
+# адресом CDN, и все посетители попадут под один лимит 5 в час.
