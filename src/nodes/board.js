@@ -41,7 +41,8 @@ const cards = latest.map((r) => {
     '<span class="tag cat-' + escapeHtml(r.category) + '">' + escapeHtml(LABEL_CATEGORY[r.category] || r.category) + '</span>',
     '<span class="tag urg-' + escapeHtml(r.urgency) + '">срочность: ' + escapeHtml(LABEL_URGENCY[r.urgency] || r.urgency) + '</span>',
     r.needs_human ? '<span class="tag human">нужен человек</span>' : '',
-    '<span class="tag mode">' + escapeHtml(r.mode) + '</span>',
+    // имя модели рядом с режимом: строки проверок на заглушке API (fake-model) видно сразу
+    '<span class="tag mode">' + escapeHtml(r.mode + (r.mode !== 'mock' && r.model ? ' · ' + String(r.model).split('/').pop() : '')) + '</span>',
   ].join('');
   const hidden = hiddenReason(r);
   if (hidden) {

@@ -179,6 +179,11 @@ t('Доска: «токенов сегодня X из Y», рубли тольк
   html = run(board, 'HTML доски', { nodes: { 'Последние 20': [], 'Расход за сегодня': today },
     env: { ...env, PRICE_RUB_PER_1M_INPUT: '100', PRICE_RUB_PER_1M_OUTPUT: '400' } })[0].html;
   assert.ok(html.includes('≈ 0.36\u00a0₽ по ценам из настроек'));
+  const card = { ts: 3, day: '2026-10-05', category: 'repair', urgency: 'high', needs_human: false, summary: 'Ремонт',
+    next_step: 'Выезд', text_masked: 'ремонт', city: null, budget_rub: null, pii_masked: 0, tokens_in: 1, tokens_out: 1 };
+  html = run(board, 'HTML доски', { nodes: { 'Последние 20': [{ ...card, mode: 'llm', model: 'openai/gpt-5.6-terra' },
+    { ...card, ts: 2, mode: 'llm', model: 'fake-model' }, { ...card, ts: 1, mode: 'mock', model: 'mock' }], 'Расход за сегодня': [] }, env })[0].html;
+  assert.ok(html.includes('>llm · gpt-5.6-terra<') && html.includes('>llm · fake-model<') && html.includes('>mock<'));
   html = run(board, 'HTML доски', { nodes: { 'Последние 20': [], 'Расход за сегодня': [] }, env: { ...llmEnv, TRIAGE_FORCE_MOCK: 'true' } })[0].html;
   assert.ok(html.includes('mock: модель отключена настройкой'));
 });
