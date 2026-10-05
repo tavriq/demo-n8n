@@ -1,0 +1,304 @@
+{
+  "id": "triageBoardFlow1",
+  "name": "Триаж: публичная доска",
+  "description": "GET /webhook/board: последние 20 заявок и расход за сегодня, HTML без внешних ресурсов.",
+  "active": false,
+  "nodes": [
+    {
+      "id": "906bdadf-2272-5baf-88d1-ad390806919a",
+      "name": "Webhook GET /board",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "path": "board",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "ef88db10-956a-55c0-abc2-afa477124f15"
+    },
+    {
+      "id": "c62f9863-5e7b-57f7-8f76-851980abe84b",
+      "name": "Таблица: создать, если нет",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "resource": "table",
+        "operation": "create",
+        "tableName": "triage_log",
+        "columns": {
+          "column": [
+            {
+              "name": "ts",
+              "type": "number"
+            },
+            {
+              "name": "day",
+              "type": "string"
+            },
+            {
+              "name": "created_at",
+              "type": "string"
+            },
+            {
+              "name": "source",
+              "type": "string"
+            },
+            {
+              "name": "client_key",
+              "type": "string"
+            },
+            {
+              "name": "text_masked",
+              "type": "string"
+            },
+            {
+              "name": "pii_masked",
+              "type": "number"
+            },
+            {
+              "name": "category",
+              "type": "string"
+            },
+            {
+              "name": "urgency",
+              "type": "string"
+            },
+            {
+              "name": "city",
+              "type": "string"
+            },
+            {
+              "name": "budget_rub",
+              "type": "number"
+            },
+            {
+              "name": "summary",
+              "type": "string"
+            },
+            {
+              "name": "next_step",
+              "type": "string"
+            },
+            {
+              "name": "needs_human",
+              "type": "boolean"
+            },
+            {
+              "name": "confidence",
+              "type": "number"
+            },
+            {
+              "name": "mode",
+              "type": "string"
+            },
+            {
+              "name": "attempts",
+              "type": "number"
+            },
+            {
+              "name": "cost_usd",
+              "type": "number"
+            },
+            {
+              "name": "model",
+              "type": "string"
+            },
+            {
+              "name": "llm_error",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {
+          "createIfNotExists": true
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "db2778bc-1af1-51b6-95e3-66eb6a08e37e",
+      "name": "Последние 20",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "triage_log"
+        },
+        "limit": 20,
+        "orderBy": true,
+        "orderByColumn": "ts",
+        "orderByDirection": "DESC"
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "efa0aae0-856a-5379-b246-d3c6acab98e3",
+      "name": "Расход за сегодня",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "resource": "row",
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "triage_log"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "day",
+              "condition": "eq",
+              "keyValue": "={{ $now.toFormat('yyyy-MM-dd') }}"
+            }
+          ]
+        },
+        "returnAll": true
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "71db7ba2-fb4d-5ceb-b492-e5bba98a88a6",
+      "name": "HTML доски",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Экранирование и форматирование для HTML (доска и страница формы).\nfunction escapeHtml(value) {\n  return String(value == null ? '' : value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#39;');\n}\n\nfunction formatUsd(x) {\n  const n = Number(x) || 0;\n  return '$' + n.toFixed(4).replace(/0{1,2}$/, '');\n}\n\nconst LABEL_CATEGORY = {\n  repair: 'Ремонт', rental: 'Аренда', cleaning: 'Уборка', consultation: 'Консультация',\n  complaint: 'Жалоба', spam: 'Спам', other: 'Другое',\n};\nconst LABEL_URGENCY = { low: 'низкая', normal: 'обычная', high: 'высокая' };\n\n// ---- нода ----\n// Доска: последние 20 заявок + расход за сегодня. Весь текст пользователя и модели\n// экранируется; внешних ресурсов нет (CSP default-src 'none').\nconst pick = (name) => $(name).all().map((i) => i.json).filter((r) => r && r.ts !== undefined && r.ts !== null);\nconst latest = pick('Последние 20').sort((a, b) => Number(b.ts) - Number(a.ts)).slice(0, 20);\nconst today = pick('Расход за сегодня');\n\nconst env = (name, def) => {\n  const v = $env[name];\n  return v === undefined || v === null || String(v).trim() === '' ? def : String(v).trim();\n};\nconst budget = Number(env('DAILY_BUDGET_USD', '0.5')) || 0.5;\nconst spent = today.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);\nconst pct = Math.min(100, Math.round((spent / budget) * 100));\nconst live = env('ANTHROPIC_API_KEY', '') !== '' && env('TRIAGE_FORCE_MOCK', 'false').toLowerCase() !== 'true';\nconst modeNow = live ? 'LLM (' + env('LLM_MODEL', 'claude-haiku-4-5-20251001') + ')' : 'mock: ключ API не задан, работает заглушка по ключевым словам';\nconst tz = 'Europe/Moscow';\n\nconst cut = (s, n) => {\n  const t = String(s == null ? '' : s);\n  return t.length > n ? t.slice(0, n) + '…' : t;\n};\n\nconst cards = latest.map((r) => {\n  const when = DateTime.fromMillis(Number(r.ts)).setZone(tz).toFormat('dd.MM HH:mm');\n  const tags = [\n    '<span class=\"tag cat-' + escapeHtml(r.category) + '\">' + escapeHtml(LABEL_CATEGORY[r.category] || r.category) + '</span>',\n    '<span class=\"tag urg-' + escapeHtml(r.urgency) + '\">срочность: ' + escapeHtml(LABEL_URGENCY[r.urgency] || r.urgency) + '</span>',\n    r.needs_human ? '<span class=\"tag human\">нужен человек</span>' : '',\n    '<span class=\"tag mode\">' + escapeHtml(r.mode) + '</span>',\n  ].join('');\n  const facts = [];\n  if (r.city) facts.push('город: ' + escapeHtml(r.city));\n  if (r.budget_rub !== null && r.budget_rub !== undefined && r.budget_rub !== '') facts.push('бюджет: ' + escapeHtml(r.budget_rub) + ' ₽');\n  if (Number(r.pii_masked) > 0) facts.push('скрыто контактов: ' + escapeHtml(r.pii_masked));\n  return [\n    '<article class=\"card\">',\n    '<div class=\"row\"><time>' + escapeHtml(when) + '</time><div class=\"tags\">' + tags + '</div></div>',\n    '<p class=\"summary\">' + escapeHtml(r.summary) + '</p>',\n    '<p class=\"next\"><b>Дальше:</b> ' + escapeHtml(r.next_step) + '</p>',\n    facts.length ? '<p class=\"facts\">' + facts.join(' · ') + '</p>' : '',\n    '<blockquote>' + escapeHtml(cut(r.text_masked, 200)) + '</blockquote>',\n    '</article>',\n  ].join('');\n}).join('\\n');\n\nconst html = `<!doctype html>\n<html lang=\"ru\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<meta name=\"robots\" content=\"noindex\">\n<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\">\n<title>Триаж заявок: доска</title>\n<style>\n:root{--bg:#f6f7f9;--fg:#1d2330;--muted:#5d6676;--card:#fff;--line:#e2e5ea;--accent:#2f6fde;--warn:#b5432b;--ok:#2d7a4f;--chip:#eef1f5}\n@media (prefers-color-scheme:dark){:root{--bg:#14171c;--fg:#e6e9ee;--muted:#9aa3b2;--card:#1d2128;--line:#2c323b;--accent:#7aa7ff;--warn:#ff8a70;--ok:#6fcf97;--chip:#262b33}}\n*{box-sizing:border-box}\nbody{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif}\nmain{max-width:860px;margin:0 auto;padding:24px 16px 48px}\nh1{font-size:22px;margin:0 0 4px}\n.lead{color:var(--muted);margin:0 0 16px}\n.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:16px}\n.meter{height:8px;background:var(--chip);border-radius:4px;overflow:hidden;margin-top:8px}\n.meter span{display:block;height:100%;background:var(--accent)}\n.small{color:var(--muted);font-size:13px;margin:6px 0 0}\na{color:var(--accent)}\n.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin-bottom:10px}\n.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}\ntime{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}\n.tags{display:flex;flex-wrap:wrap;gap:6px}\n.tag{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--chip)}\n.tag.human{color:var(--warn);font-weight:600}\n.tag.urg-high{color:var(--warn)}\n.tag.mode{font-family:ui-monospace,Menlo,monospace}\n.summary{margin:8px 0 4px;font-weight:600}\n.next{margin:0 0 4px}\n.facts{margin:0 0 4px;color:var(--muted);font-size:13px}\nblockquote{margin:8px 0 0;padding:6px 10px;border-left:3px solid var(--line);color:var(--muted);font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}\n.empty{color:var(--muted);text-align:center;padding:24px}\n</style>\n</head>\n<body>\n<main>\n<h1>Триаж входящих заявок</h1>\n<p class=\"lead\">Демо на n8n: текст заявки разбирается в JSON (категория, срочность, город, бюджет, следующий шаг). Телефоны и email маскируются до сохранения. Всё, что здесь видно, публично.</p>\n<section class=\"panel\" aria-label=\"Расход\">\n<div>Потрачено сегодня: <b>${escapeHtml(formatUsd(spent))}</b> из ${escapeHtml(formatUsd(budget))}</div>\n<div class=\"meter\" role=\"img\" aria-label=\"${pct}% дневного бюджета\"><span style=\"width:${pct}%\"></span></div>\n<p class=\"small\">Режим сейчас: ${escapeHtml(modeNow)}. Лимиты: ${escapeHtml(env('RATE_LIMIT_PER_IP_HOUR', '5'))} заявок в час с адреса, ${escapeHtml(env('RATE_LIMIT_GLOBAL_HOUR', '60'))} в час всего.</p>\n<p class=\"small\"><a href=\"../form/triage-demo\" target=\"_top\">Отправить свою заявку</a></p>\n</section>\n<h2 style=\"font-size:16px;margin:20px 0 10px\">Последние заявки: ${latest.length} из 20</h2>\n${cards || '<p class=\"empty\">Пока пусто.</p>'}\n</main>\n</body>\n</html>`;\n\nreturn [{ json: { html } }];\n"
+      }
+    },
+    {
+      "id": "73f6824d-97e6-5abe-b828-e4781815d562",
+      "name": "Ответ: HTML",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1100,
+        0
+      ],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              },
+              {
+                "name": "X-Content-Type-Options",
+                "value": "nosniff"
+              },
+              {
+                "name": "Referrer-Policy",
+                "value": "no-referrer"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook GET /board": {
+      "main": [
+        [
+          {
+            "node": "Таблица: создать, если нет",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Таблица: создать, если нет": {
+      "main": [
+        [
+          {
+            "node": "Последние 20",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Последние 20": {
+      "main": [
+        [
+          {
+            "node": "Расход за сегодня",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Расход за сегодня": {
+      "main": [
+        [
+          {
+            "node": "HTML доски",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML доски": {
+      "main": [
+        [
+          {
+            "node": "Ответ: HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Moscow",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

@@ -1,0 +1,224 @@
+{
+  "id": "triageEntryFlow1",
+  "name": "Триаж: вход (вебхук и форма)",
+  "description": "POST /webhook/triage {\"text\": ...} и форма /form/triage-demo; разбор в под-воркфлоу ядра.",
+  "active": false,
+  "nodes": [
+    {
+      "id": "f7127beb-1d2a-5bfa-b1d3-b11fe8f89867",
+      "name": "Webhook POST /triage",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "triage",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "f1d8083c-91e3-54a6-b2f9-e9bf3ee61d5c"
+    },
+    {
+      "id": "6d527150-786b-54a3-a504-bb6cf6fa81f6",
+      "name": "Разбор (API)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "triageCoreFlow01"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      }
+    },
+    {
+      "id": "1952e89d-71dc-5768-a153-7f75fc5a3708",
+      "name": "Ответ API",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.response) }}",
+        "options": {
+          "responseCode": "={{ $json.http_status }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "e6706e9b-22f9-5bcd-83f0-56974964a2eb",
+      "name": "Форма заявки",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        260
+      ],
+      "parameters": {
+        "formTitle": "Заявка в сервисную компанию (демо)",
+        "formDescription": "Опишите задачу: ремонт или аренда оборудования, уборка, вопрос. Заявку разберёт n8n + LLM и покажет результат.\n\nНе вводите персональные данные: имя, телефон, email, адрес. Всё, что вы напишете, видно на публичной доске. Если контакты всё же попадут в текст, они будут замаскированы.",
+        "formFields": {
+          "values": [
+            {
+              "fieldName": "text",
+              "fieldLabel": "Текст заявки (до 1000 символов)",
+              "fieldType": "textarea",
+              "placeholder": "Например: сломался генератор на складе в Казани, нужен мастер сегодня",
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {
+          "path": "triage-demo",
+          "buttonLabel": "Разобрать заявку",
+          "appendAttribution": false,
+          "ignoreBots": true,
+          "showHeaders": true
+        }
+      },
+      "webhookId": "153a0399-9e22-50e0-b1d0-f4347bbb8ef3"
+    },
+    {
+      "id": "30aa2d36-27e7-56f3-b138-684f47ebf0a5",
+      "name": "Разбор (форма)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        260
+      ],
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "triageCoreFlow01"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      }
+    },
+    {
+      "id": "5b193d46-698e-566a-b130-95e479707b89",
+      "name": "Ответ формы",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.3,
+      "position": [
+        480,
+        260
+      ],
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "text",
+        "completionTitle": "={{ $json.form_title }}",
+        "completionMessage": "={{ $json.form_message }}",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 10,
+        "resumeUnit": "minutes",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "webhookId": "9c99713a-64b2-5406-b445-32bdebb13126"
+    }
+  ],
+  "connections": {
+    "Webhook POST /triage": {
+      "main": [
+        [
+          {
+            "node": "Разбор (API)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Разбор (API)": {
+      "main": [
+        [
+          {
+            "node": "Ответ API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Форма заявки": {
+      "main": [
+        [
+          {
+            "node": "Разбор (форма)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Разбор (форма)": {
+      "main": [
+        [
+          {
+            "node": "Ответ формы",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Moscow",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
