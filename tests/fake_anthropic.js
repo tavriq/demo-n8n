@@ -4,7 +4,8 @@
 //   FAKE_INVALID_ONCE   — первый ответ с битым JSON, второй валидный (проверка повтора)
 //   FAKE_INVALID_ALWAYS — оба ответа битые (проверка needs_human-заглушки)
 //   FAKE_HTTP_500       — ошибка API
-// Пишет в stdout только форму запроса (модель, наличие схемы), не заголовки.
+// Пишет в stdout только форму запроса (модель, наличие схемы) и флаг piiLike —
+// есть ли в тексте запроса что-то похожее на email, @ник или телефон. Сам текст и заголовки не пишет.
 const http = require('http');
 
 const port = Number(process.argv[2] || 18999);
@@ -27,8 +28,9 @@ http.createServer((req, res) => {
     const headerOk = typeof req.headers['x-api-key'] === 'string' && req.headers['x-api-key'].length > 0
       && req.headers['anthropic-version'] === '2023-06-01';
     const schemaOk = body.output_config && body.output_config.format && body.output_config.format.type === 'json_schema';
+    const piiLike = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}|@[A-Za-z][A-Za-z0-9_]{4,}|(?:\d[\s()-]*){7,}/.test(text);
     console.log(JSON.stringify({ path: req.url, model: body.model, max_tokens: body.max_tokens, headerOk, schemaOk,
-      retry: /не прошёл проверку/.test(text) }));
+      retry: /не прошёл проверку/.test(text), piiLike }));
     const send = (status, obj) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
     if (req.url !== '/v1/messages' || !headerOk) return send(401, { type: 'error', error: { type: 'authentication_error', message: 'bad' } });
     if (/FAKE_HTTP_500/.test(text)) return send(500, { type: 'error', error: { type: 'api_error', message: 'boom' } });
