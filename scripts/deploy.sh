@@ -19,7 +19,7 @@ echo "== rsync -> $HOST:$DIR"
 ssh "$HOST" "mkdir -p '$DIR'"
 # .env живёт только на сервере: исключён из передачи и из --delete
 rsync -rlptz --delete \
-  --exclude='.git/' --exclude='.env' --exclude='.DS_Store' --exclude='tmp/' \
+  --exclude='.git/' --exclude='.env' --exclude='.DS_Store' --exclude='tmp/' --exclude='__pycache__/' \
   "$ROOT/" "$HOST:$DIR/"
 
 echo "== сервер: .env, импорт, публикация, запуск"
