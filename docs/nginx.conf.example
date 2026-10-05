@@ -64,9 +64,11 @@ server {
     }
 }
 
-# Другие прокси. Caddy и Cloudflare Tunnel (cloudflared) не перезаписывают X-Real-IP,
-# который прислал клиент, поэтому TRUST_PROXY_HEADER=x-real-ip с ними не ставить:
+# Другие прокси. Caddy, Cloudflare Tunnel (cloudflared) и Tailscale Funnel не перезаписывают
+# X-Real-IP, который прислал клиент, поэтому TRUST_PROXY_HEADER=x-real-ip с ними не ставить:
 #   - Cloudflare: TRUST_PROXY_HEADER=cf-connecting-ip (заголовок ставит Cloudflare);
+#   - Tailscale Funnel: xff-last (tailscaled ставит X-Forwarded-For одним адресом клиента,
+#     заменяя присланный; limit_req, кэша доски и лимита тела у Funnel нет);
 #   - Caddy: xff-last, если Caddy не доверяет X-Forwarded-For клиента (trusted_proxies
 #     не настроен); проверить по документации своей версии.
 # Если цепочка из двух прокси (CDN -> nginx), последний адрес X-Forwarded-For окажется
