@@ -1,5 +1,5 @@
-# Пример публичного адреса демо через nginx. Не применялся и не проверялся на живом
-# сервере: в репозитории прокси нет, n8n слушает только 127.0.0.1:18102.
+# Публичный адрес демо через nginx. Так настроен n8n.tavriq.ru; здесь — с адресом-заглушкой.
+# n8n слушает только 127.0.0.1:18102, наружу его открывает этот прокси.
 #
 # До публикации:
 #   1. Через ssh-туннель создать аккаунт владельца n8n (первый, кто откроет редактор,
@@ -7,8 +7,8 @@
 #   2. В /opt/demos/n8n/.env: TRUST_PROXY_HEADER=x-real-ip, WEBHOOK_URL=https://demo.example.com/,
 #      N8N_PROXY_HOPS=1; затем scripts/deploy.sh.
 #
-# Наружу открыты только форма, страница результата и доска. POST /webhook/triage
-# (API для evals и smoke) и редактор не публикуются.
+# Наружу открыты: песочница на корне (статика из sandbox/), POST /webhook/triage для неё,
+# форма, страница результата и доска. Редактор n8n не публикуется.
 
 # --- в блоке http {} ---
 limit_req_zone  $binary_remote_addr zone=demo_req:10m rate=2r/s;
@@ -56,6 +56,33 @@ server {
     # страница результата; браузер опрашивает .../n8n-execution-status
     location /form-waiting/ {
         limit_req zone=demo_req burst=20 nodelay;
+        proxy_pass http://127.0.0.1:18102;
+    }
+
+    # песочница: статика из репозитория, строгий CSP (скрипты и стили только свои файлы,
+    # запросы только на этот же домен). add_header в location отменяет заголовки уровня
+    # server, поэтому общие заголовки повторены
+    location = / {
+        root /opt/demos/n8n/sandbox;
+        try_files /index.html =404;
+        add_header Cache-Control "no-cache" always;
+        add_header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy no-referrer always;
+    }
+    location /s/ {
+        limit_except GET { deny all; }
+        alias /opt/demos/n8n/sandbox/;
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options nosniff always;
+    }
+
+    # API для песочницы. Деньги защищает cost guard в n8n (5 заявок в час с адреса,
+    # 60 в час на API, дневной лимит токенов); здесь — частота запросов
+    location = /webhook/triage {
+        limit_except POST { deny all; }
+        limit_req zone=demo_req burst=3 nodelay;
+        limit_req_status 429;
         proxy_pass http://127.0.0.1:18102;
     }
 
