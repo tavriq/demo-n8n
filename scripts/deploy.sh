@@ -10,6 +10,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "== проверка сборки воркфлоу"
 python3 "$ROOT/scripts/build_workflows.py" --check
+python3 "$ROOT/evals/run.py" --self-test
 if command -v node >/dev/null 2>&1; then
   node "$ROOT/tests/test_lib.js"
   node "$ROOT/tests/check_workflows.js"
