@@ -45,5 +45,6 @@ return [{
     ip_requests_last_hour: ipHour,
     requests_last_hour: lastHour.length,
     source_requests_last_hour: sourceHour,
+    t_guard: Date.now(),
   },
 }];

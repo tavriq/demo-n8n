@@ -265,7 +265,7 @@ def build_core():
             "additionalFields": {"appendAttribution": False, "parse_mode": "HTML"},
         }, disabled=True, onError="continueRegularOutput", notesInFlow=True,
             notes="Выключено. Включить: credential Telegram API + TELEGRAM_CHAT_ID в .env (README)"),
-        code(wf, "Ответ: результат", (3080, 420), "respond.js", ["html", "triage"]),
+        code(wf, "Ответ: результат", (3080, 420), "respond.js", ["html", "pii", "triage"]),
         sticky(wf, "Заметка: ядро", (-40, 480), (560, 220),
                "## Ядро: один разбор для обоих входов\n"
                "Вызывается из воркфлоу «Триаж: вход» (вебхук и форма) и возвращает данные последней ноды, "
@@ -335,9 +335,9 @@ def build_entry():
             "httpMethod": "POST",
             "path": "triage",
             "responseMode": "responseNode",
-            # браузеры с чужих сайтов не получат CORS-разрешение: API нужен
-            # только для evals и smoke, страницы демо его не вызывают
-            "options": {"allowedOrigins": "http://localhost:18102"},
+            # песочница на корне демо зовёт API со своего домена (same-origin);
+            # браузеры с чужих сайтов CORS-разрешения не получат
+            "options": {"allowedOrigins": "https://n8n.tavriq.ru,http://localhost:18102"},
         }, webhookId=uid(wf, "webhook-triage")),
         node(wf, "Разбор (API)", "n8n-nodes-base.executeWorkflow", 1.2, (240, 0), exec_params),
         node(wf, "Ответ API", "n8n-nodes-base.respondToWebhook", 1.4, (480, 0), {
@@ -351,7 +351,7 @@ def build_entry():
         node(wf, "Форма заявки", "n8n-nodes-base.formTrigger", 2.5, (0, 260), {
             "formTitle": "Заявка в сервисную компанию (демо)",
             "formDescription": (
-                "Опишите задачу: ремонт или аренда оборудования, уборка, вопрос. "
+                "Опишите задачу: ремонт, аренда или монтаж оборудования, вопрос. "
                 "Заявку разберёт n8n + LLM и покажет результат.\n\n"
                 "Не вводите персональные данные: имя, телефон, email, адрес. "
                 "Всё, что вы напишете, видно на публичной доске. "
@@ -391,8 +391,9 @@ def build_entry():
                "## Вход: вебхук и форма → одно ядро\n"
                "Form Trigger не разрешает Respond to Webhook в своей ветке, а evals нужен JSON с кодом ответа. "
                "Поэтому два триггера в одном воркфлоу, а разбор — в под-воркфлоу «Триаж: ядро».\n\n"
-               "Публично открывается только форма. `POST /webhook/triage` — для evals и smoke, "
-               "через прокси его не публиковать."),
+               "Наружу через прокси: форма и `POST /webhook/triage` для песочницы на корне демо "
+               "(limit_req на прокси, 5 заявок в час с адреса в cost guard). Ответ API несёт трассу: "
+               "тайминги шагов, сырой ответ модели, итог проверки, маршрут."),
     ]
     c = {}
     connect(c, "Webhook POST /triage", "Разбор (API)")

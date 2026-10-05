@@ -19,6 +19,8 @@ return [{
       message,
       tokens_today: c.tokens_today,
       daily_token_budget: c.daily_token_budget,
+      // отказы в журнал не пишутся: счётчик заявок с адреса не растёт
+      limits: { ip_used: c.bypass_hourly ? null : c.ip_requests_last_hour, ip_limit: c.limit_ip_hour },
     },
     form_title: 'Заявка не принята',
     form_message: escapeHtml(message),

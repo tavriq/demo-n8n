@@ -10,5 +10,6 @@ return [{
     tokens_out: 0,
     llm_error: null,
     warnings: [],
+    t_mock: Date.now(),
   },
 }];

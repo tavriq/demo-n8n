@@ -23,7 +23,7 @@ if d.get("ok") is False and d.get("error", "").startswith("rate_limited"):
     print("smoke triage: лимит в час уже выбран, контур ответил отказом 429:", d["error"]); sys.exit(0)
 r = d["result"]
 assert d["ok"] is True, d
-assert r["category"] in {"repair","rental","cleaning","consultation","complaint","spam","other"}
+assert r["category"] in {"repair","rental","installation","consultation","complaint","spam","other"}
 assert r["urgency"] in {"low","normal","high"}
 assert isinstance(r["needs_human"], bool) and 0 <= r["confidence"] <= 1
 assert "999" not in d["meta"]["text_masked"], "телефон не замаскирован"

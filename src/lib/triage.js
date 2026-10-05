@@ -1,6 +1,6 @@
 // Контракт результата триажа: JSON-схема для structured outputs, промпт,
 // сборка запроса к OpenAI-совместимому chat/completions, разбор ответа, проверка, учёт токенов.
-const TRIAGE_CATEGORIES = ['repair', 'rental', 'cleaning', 'consultation', 'complaint', 'spam', 'other'];
+const TRIAGE_CATEGORIES = ['repair', 'rental', 'installation', 'consultation', 'complaint', 'spam', 'other'];
 const TRIAGE_URGENCIES = ['low', 'normal', 'high'];
 const TRIAGE_FIELDS = ['category', 'urgency', 'city', 'budget_rub', 'summary', 'next_step', 'needs_human', 'confidence'];
 
@@ -23,13 +23,13 @@ const TRIAGE_SCHEMA = {
 };
 
 const TRIAGE_SYSTEM_PROMPT = [
-  'Ты разбираешь входящие заявки сервисной компании: ремонт и аренда оборудования, уборка помещений, консультации.',
+  'Ты разбираешь входящие заявки сервисной компании: ремонт, аренда и монтаж оборудования, консультации.',
   'Верни JSON по заданной схеме.',
   '',
   'category:',
   '- repair: поломка или ремонт оборудования, техники, помещения;',
   '- rental: аренда или прокат оборудования;',
-  '- cleaning: уборка, клининг, мойка;',
+  '- installation: монтаж, установка, подключение и пусконаладка оборудования, техники, инженерных систем;',
   '- consultation: вопрос, подбор, цена без готового заказа;',
   '- complaint: недовольство уже оказанной услугой, претензия, требование возврата;',
   '- spam: реклама, предложения не по теме, бессмысленный текст;',
@@ -175,6 +175,7 @@ function cleanError(msg) {
 }
 
 // Разбор выхода HTTP Request ноды (fullResponse + neverError) для chat/completions.
+// raw — текст ответа модели как есть (до 2000 символов), для трассы в ответе API.
 function parseLlmResponse(http) {
   if (!http || typeof http !== 'object') return { ok: false, errors: ['пустой ответ HTTP-ноды'], usage: llmTokens(null) };
   if (http.error) {
@@ -198,13 +199,14 @@ function parseLlmResponse(http) {
   if (choice.finish_reason === 'content_filter') return { ok: false, errors: ['ответ заблокирован фильтром'], usage };
   let text = msg.content;
   if (Array.isArray(text)) text = text.map((p) => (p && typeof p.text === 'string' ? p.text : '')).join('');
-  if (typeof text !== 'string' || !text.trim()) return { ok: false, errors: ['пустой ответ модели'], usage };
+  if (typeof text !== 'string' || !text.trim()) return { ok: false, errors: ['пустой ответ модели'], usage, raw: '' };
+  const raw = text.slice(0, 2000);
   let parsed;
   try { parsed = JSON.parse(text); } catch (e) {
-    return { ok: false, errors: ['невалидный JSON'], usage };
+    return { ok: false, errors: ['невалидный JSON'], usage, raw };
   }
   const v = validateTriage(parsed);
-  return { ok: v.ok, errors: v.errors, warnings: v.warnings, value: v.value, usage };
+  return { ok: v.ok, errors: v.errors, warnings: v.warnings, value: v.value, usage, raw };
 }
 
 function fallbackTriage() {

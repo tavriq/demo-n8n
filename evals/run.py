@@ -31,7 +31,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-CATEGORIES = ["repair", "rental", "cleaning", "consultation", "complaint", "spam", "other"]
+CATEGORIES = ["repair", "rental", "installation", "consultation", "complaint", "spam", "other"]
 URGENCIES = ["low", "normal", "high"]
 GRADED = ["category", "urgency", "needs_human", "city", "budget_rub"]
 

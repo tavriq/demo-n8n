@@ -2,6 +2,8 @@
 // ключ клиента (HMAC от IP), режим (llm/mock), лимиты из env.
 const crypto = require('crypto');
 
+const tStart = Date.now();  // метки t_* — для таймингов шагов в ответе API
+
 const MAX_LEN = 1000;
 const inJson = $input.first().json;
 const fromForm = Object.prototype.hasOwnProperty.call(inJson, 'submittedAt')
@@ -65,6 +67,7 @@ if (evalToken.length >= 16 && sentToken.length === evalToken.length) {
 }
 
 const masked = maskPII(trimmed.slice(0, MAX_LEN));
+const tMasked = Date.now();
 // LLM: OpenAI-совместимый chat/completions. Ключ и адрес шлюза приходят из env
 // (на сервере — общий файл ../llm.env, см. docker-compose.yml); модель — LLM_MODEL,
 // если пусто — LLM_MODEL_SMART. Нет ключа, адреса или модели -> mock.
@@ -101,6 +104,8 @@ const ctx = {
   limit_ip_hour: envNum('RATE_LIMIT_PER_IP_HOUR', 5),
   limit_global_hour: envNum('RATE_LIMIT_GLOBAL_HOUR', 60),
   trust_proxy_header: trust,
+  t_start: tStart,
+  t_masked: tMasked,
 };
 if (mode === 'llm' && !inputError) {
   ctx.llm_body = buildLlmBody(ctx.text_masked, model, maxTokens, null, reasoningEffort);

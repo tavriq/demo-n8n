@@ -18,7 +18,7 @@ function formatRub(x) {
 }
 
 const LABEL_CATEGORY = {
-  repair: 'Ремонт', rental: 'Аренда', cleaning: 'Уборка', consultation: 'Консультация',
+  repair: 'Ремонт', rental: 'Аренда', installation: 'Монтаж', consultation: 'Консультация',
   complaint: 'Жалоба', spam: 'Спам', other: 'Другое',
 };
 const LABEL_URGENCY = { low: 'низкая', normal: 'обычная', high: 'высокая' };

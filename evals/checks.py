@@ -194,7 +194,7 @@ def env_session(back_mode, report):
 # ---------- фаза 1: заглушка, TRUST_PROXY_HEADER из .env ----------
 
 def check_xss(token):
-    payload = ('Нужна уборка офиса 50 м2 в Казани в пятницу. Комментарий: <script>alert("xss")</script> '
+    payload = ('Нужен монтаж кондиционера в офисе в Казани в пятницу. Комментарий: <script>alert("xss")</script> '
                '<img src=x onerror=alert(1)> "кавычки" & \'апостроф\'')
     status, _, d = triage(payload, token=token)
     html = board()
@@ -236,7 +236,7 @@ def check_spoofed_ip(env):
     seq = []
     last = {}
     for i in range(limit + 1):
-        status, _, d = triage(f"Проверка подделки адреса {i + 1}: нужна уборка склада", ip=f"192.0.2.{i + 1}")
+        status, _, d = triage(f"Проверка подделки адреса {i + 1}: нужен монтаж стеллажей", ip=f"192.0.2.{i + 1}")
         seq.append(status)
         last = d
         if status == 429:
@@ -274,7 +274,7 @@ def check_rate_limit_ip(env):
     other = f"198.51.100.{(int(ip.rsplit('.', 1)[1]) % 254) + 1}"
     seq, last = [], {}
     for i in range(limit + 1):
-        status, _, d = triage(f"Проверка лимита {i + 1}: нужна уборка склада", ip=ip)
+        status, _, d = triage(f"Проверка лимита {i + 1}: нужен монтаж стеллажей", ip=ip)
         seq.append(status)
         last = d
         time.sleep(0.3)
@@ -294,12 +294,12 @@ def check_form(env):
     ip = f"203.0.113.{random.randint(1, 254)}"
     other = f"203.0.113.{(int(ip.rsplit('.', 1)[1]) % 254) + 1}"
     get_curl = raw(FORM, headers={"User-Agent": UA_CURL})[0]
-    post_curl, _ = form_submit("Проверка формы от бота: нужна уборка", ip=ip, ua=UA_CURL)
+    post_curl, _ = form_submit("Проверка формы от бота: нужен монтаж", ip=ip, ua=UA_CURL)
     get_browser, page_form = raw(FORM, headers={"User-Agent": UA_BROWSER})
-    text = '<b>жирный</b> & "кавычки" — проверка формы: нужна уборка склада в Казани, звоните 8 916 555-44-33'
+    text = '<b>жирный</b> & "кавычки" — проверка формы: нужен монтаж стеллажей в Казани, звоните 8 916 555-44-33'
     pages = []
     for i in range(limit + 1):
-        st, page = form_submit(text if i == 0 else f"Проверка лимита формы {i + 1}: нужна уборка склада", ip=ip)
+        st, page = form_submit(text if i == 0 else f"Проверка лимита формы {i + 1}: нужен монтаж стеллажей", ip=ip)
         pages.append((st, page or ""))
     st_other, page_other = form_submit("Проверка формы с другого адреса: нужна аренда пылесоса", ip=other)
     first, last = pages[0][1], pages[-1][1]
@@ -326,12 +326,12 @@ def check_form(env):
 def check_llm_branch(env, token, tokens_before, apply):
     fake_key = "fake-key-" + secrets.token_hex(8)
     texts = {
-        "http500": "Проверка LLM-ветки FAKE_HTTP_500: нужна уборка склада",
+        "http500": "Проверка LLM-ветки FAKE_HTTP_500: нужен монтаж стеллажей",
         "pii_output": "Проверка LLM-ветки FAKE_PII_OUTPUT: сломался компрессор, звоните +7 916 222-33-44, "
                       "почта budget.check@example.com",
         "invalid_once": "Проверка LLM-ветки FAKE_INVALID_ONCE: нужна аренда пылесоса",
-        "invalid_always": "Проверка LLM-ветки FAKE_INVALID_ALWAYS: нужна уборка офиса",
-        "budget": "Проверка бюджета: нужна уборка подъезда",
+        "invalid_always": "Проверка LLM-ветки FAKE_INVALID_ALWAYS: нужен монтаж кондиционера",
+        "budget": "Проверка бюджета: нужен монтаж домофона",
     }
     max_tokens = max(200, min(2000, round(float(env.get("LLM_MAX_TOKENS") or 600))))
     # резерв как в ноде «Подготовка» (+100 символов запаса на маскирование)
