@@ -2,21 +2,27 @@
 """Проверки защиты на живом контуре. Запуск на сервере из каталога проекта
 (нужны docker compose и .env):
 
-  python3 evals/checks.py              # все три фазы
-  python3 evals/checks.py --no-temp-env  # только фаза 1, .env не трогается
+  python3 evals/checks.py                # три фазы и проверка секретов
+  python3 evals/checks.py --no-temp-env  # только фаза 1 на текущих настройках, .env не трогается
 
-Фаза 1, текущий .env (TRUST_PROXY_HEADER=direct): XSS на доске, маскирование контактов,
-файл 2 МБ в multipart получает 413, подделанный X-Real-IP не обходит лимит.
+Фазы 1 и 2 проверяют контур, а не модель, поэтому идут на заглушке по ключевым словам
+(временно TRIAGE_FORCE_MOCK=true): результат не зависит от ответа модели и не тратит токены.
+Поведение модели (контакты в ответе, prompt injection) меряет evals/run.py.
+Фаза 1 (TRUST_PROXY_HEADER как в .env, по умолчанию direct): XSS на доске, маскирование
+контактов, файл 2 МБ в multipart получает 413, подделанный X-Real-IP не обходит лимит.
 Фаза 2, временно TRUST_PROXY_HEADER=x-real-ip (как за nginx, который перезаписывает
 заголовок): лимит заявок с адреса для API и для формы; форма: боты получают 401,
 страница результата экранирована.
-Фаза 3, временно тестовый ключ и локальная заглушка Messages API (tests/fake_anthropic.js
-внутри контейнера) вместо Anthropic: ветка LLM (HTTP 500, повтор после битого JSON,
-заглушка после двух неудач, контакт в ответе модели), дневной бюджет, тестовый ключ
-не попадает в sqlite и логи контейнера. Если задан настоящий ANTHROPIC_API_KEY, фаза 3
-пропускается: она не должна тратить деньги и трогать ключ.
+Фаза 3, временно тестовый ключ и адрес локальной заглушки OpenAI-совместимого API
+(tests/fake_openai.js внутри контейнера): ветка LLM (HTTP 500, повтор после битого JSON,
+заглушка после двух неудач, контакт в ответе модели), дневной лимит токенов, тестовый ключ
+не попадает в sqlite и логи контейнера. Настоящий ключ из ../llm.env не используется:
+.env подключён в compose после него и временно перекрывает ключ и адрес тестовыми.
+Первой, до перезапусков (логи текущего контейнера, который обслуживал живые заявки):
+настоящего ключа и адреса шлюза нет в sqlite n8n, в логах контейнера и в файлах проекта
+(кроме .env).
 
-После фаз 2 и 3 .env возвращается байт в байт, n8n перезапускается. Секреты не печатаются
+.env возвращается байт в байт, n8n перезапускается. Секреты не печатаются
 и не пишутся в результат. Пишет evals/checks-<дата>.json.
 """
 import argparse
@@ -43,7 +49,9 @@ BASE = "http://127.0.0.1:18102"
 FORM = BASE + "/form/triage-demo"
 FAKE_PORT = 18999
 BACKUP = Path(".env.checks-backup")
-FAKE_COST = (812 * 1.0 + 95 * 5.0) / 1e6  # usage заглушки × цены по умолчанию
+SHARED_LLM_ENV = Path("../llm.env")  # общий файл ключа LLM, см. docker-compose.yml
+FAKE_IN, FAKE_OUT = 812, 95  # usage, который отдаёт tests/fake_openai.js на каждый ответ 200
+FAKE_CALL = FAKE_IN + FAKE_OUT
 UA_BROWSER = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/128.0 Safari/537.36")
 UA_CURL = "curl/8.5.0"
@@ -98,9 +106,12 @@ def form_submit(text, ip=None, ua=UA_BROWSER):
     return status, raw(url, headers={"User-Agent": ua})[1]
 
 
-def spent_and_budget(html):
-    m = re.search(r"Потрачено сегодня:\s*<b>\$([\d.]+)</b>\s*из\s*\$([\d.]+)", html)
-    return (float(m.group(1)), float(m.group(2))) if m else (None, None)
+def tokens_and_budget(html):
+    m = re.search(r"Токенов сегодня:\s*<b>([\d\u00a0 ]+)</b>\s*из\s*([\d\u00a0 ]+)", html)
+    if not m:
+        return None, None
+    num = lambda x: int(re.sub(r"\D", "", x))  # noqa: E731
+    return num(m.group(1)), num(m.group(2))
 
 
 def board_mode(html):
@@ -150,19 +161,25 @@ def set_env_lines(text, values):
 
 
 @contextlib.contextmanager
-def temp_env(values, expect_mode, back_mode, report):
-    """Временно меняет .env и перезапускает n8n; в finally возвращает .env байт в байт."""
+def env_session(back_mode, report):
+    """Даёт apply(values, expect_mode): записать в .env исходные строки с заменой values
+    и перезапустить n8n. В finally .env возвращается байт в байт, n8n перезапускается."""
     if BACKUP.exists():
         raise RuntimeError(f"{BACKUP} уже есть: прошлая проверка прервалась, верните .env вручную")
     original = Path(".env").read_bytes()
     original_sha = hashlib.sha256(original).hexdigest()
     shutil.copy2(".env", BACKUP)
     os.chmod(BACKUP, 0o600)
-    try:
+    changed = set()
+
+    def apply(values, expect_mode):
+        changed.update(values)
         Path(".env").write_text(set_env_lines(original.decode("utf-8"), values), encoding="utf-8")
         os.chmod(".env", 0o600)
         restart_and_wait(expect_mode)
-        yield
+
+    try:
+        yield apply
     finally:
         shutil.copy2(BACKUP, ".env")
         os.chmod(".env", 0o600)
@@ -170,11 +187,11 @@ def temp_env(values, expect_mode, back_mode, report):
         if restored:
             BACKUP.unlink()
         html = restart_and_wait(back_mode)
-        report.append({"env_keys_changed": sorted(values), "env_identical": restored,
+        report.append({"env_keys_changed": sorted(changed), "env_identical": restored,
                        "board_mode": board_mode(html)})
 
 
-# ---------- фаза 1: текущий .env ----------
+# ---------- фаза 1: заглушка, TRUST_PROXY_HEADER из .env ----------
 
 def check_xss(token):
     payload = ('Нужна уборка офиса 50 м2 в Казани в пятницу. Комментарий: <script>alert("xss")</script> '
@@ -304,9 +321,9 @@ def check_form(env):
             "result_page_excerpt": m.group(0)[:400] if m else None}
 
 
-# ---------- фаза 3: заглушка Messages API ----------
+# ---------- фаза 3: заглушка OpenAI-совместимого API ----------
 
-def check_llm_branch(env, token, spent_before):
+def check_llm_branch(env, token, tokens_before, apply):
     fake_key = "fake-key-" + secrets.token_hex(8)
     texts = {
         "http500": "Проверка LLM-ветки FAKE_HTTP_500: нужна уборка склада",
@@ -317,40 +334,37 @@ def check_llm_branch(env, token, spent_before):
         "budget": "Проверка бюджета: нужна уборка подъезда",
     }
     max_tokens = max(200, min(2000, round(float(env.get("LLM_MAX_TOKENS") or 600))))
-    p_in = float(env.get("PRICE_INPUT_USD_PER_MTOK") or 1)
-    p_out = float(env.get("PRICE_OUTPUT_USD_PER_MTOK") or 5)
     # резерв как в ноде «Подготовка» (+100 символов запаса на маскирование)
-    reserve = max(2 * ((900 + len(t) + 100) * p_in + max_tokens * p_out) / 1e6 for t in texts.values())
-    # бюджет: хватает на сценарии до «invalid_always» включительно (5 платных вызовов
-    # заглушки), после них остатка меньше резерва, и заявка «budget» получает 429
-    budget = round((spent_before or 0) + 4 * FAKE_COST + reserve, 6)
+    reserve = max(2 * (900 + len(t) + 100 + max_tokens) for t in texts.values())
+    # лимит: хватает на сценарии до «invalid_always» включительно (5 ответов заглушки
+    # по FAKE_CALL токенов), после них остатка меньше резерва, и заявка «budget» получает 429
+    budget = (tokens_before or 0) + 4 * FAKE_CALL + reserve
     started = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    report = []
-    result = {"name": "llm_branch_and_budget", "spent_before_usd": spent_before,
-              "temporary_budget_usd": budget, "reserve_usd": round(reserve, 6)}
-    with temp_env({"ANTHROPIC_API_KEY": fake_key, "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{FAKE_PORT}",
-                   "DAILY_BUDGET_USD": f"{budget:.6f}"}, "llm", "mock", report):
-        sh(["docker", "compose", "exec", "-T", "n8n", "sh", "-c", "cat > /tmp/fake_anthropic.js"],
-           stdin="tests/fake_anthropic.js")
-        sh(["docker", "compose", "exec", "-d", "n8n", "sh", "-c",
-            f"node /tmp/fake_anthropic.js {FAKE_PORT} > /tmp/fake_anthropic.log 2>&1"])
-        for _ in range(20):
-            if "fake anthropic on" in sh(["docker", "compose", "exec", "-T", "n8n", "cat", "/tmp/fake_anthropic.log"],
-                                         check=False):
-                break
-            time.sleep(1)
-        out = {}
-        for key, text in texts.items():
-            status, body, d = triage(text, token=token)
-            out[key] = (status, body, d)
-        spent_after, budget_shown = spent_and_budget(board())
-        log = [json.loads(l) for l in sh(["docker", "compose", "exec", "-T", "n8n", "cat", "/tmp/fake_anthropic.log"],
-                                         check=False).splitlines() if l.startswith("{")]
-        # тестовый ключ не должен оказаться в базе n8n и в логах контейнера
-        mp = sh(["docker", "volume", "inspect", "demo-n8n_n8n_data", "-f", "{{.Mountpoint}}"]).strip()
-        key_b = fake_key.encode()
-        in_db = any(key_b in p.read_bytes() for p in Path(mp).glob("database.sqlite*") if p.is_file())
-        in_logs = fake_key in sh(["docker", "compose", "logs", "--no-color", "--since", started, "n8n"], check=False)
+    result = {"name": "llm_branch_and_budget", "tokens_before": tokens_before,
+              "temporary_token_budget": budget, "reserve_tokens": reserve}
+    apply({"LLM_API_KEY": fake_key, "LLM_BASE_URL": f"http://127.0.0.1:{FAKE_PORT}/v1",
+           "LLM_MODEL": "fake-model", "LLM_REASONING_EFFORT": "", "TRIAGE_FORCE_MOCK": "false",
+           "DAILY_TOKEN_BUDGET": str(budget)}, "llm")
+    sh(["docker", "compose", "exec", "-T", "n8n", "sh", "-c", "cat > /tmp/fake_openai.js"],
+       stdin="tests/fake_openai.js")
+    sh(["docker", "compose", "exec", "-d", "n8n", "sh", "-c",
+        f"node /tmp/fake_openai.js {FAKE_PORT} > /tmp/fake_openai.log 2>&1"])
+    for _ in range(20):
+        if "fake openai on" in sh(["docker", "compose", "exec", "-T", "n8n", "cat", "/tmp/fake_openai.log"],
+                                  check=False):
+            break
+        time.sleep(1)
+    out = {}
+    for key, text in texts.items():
+        status, body, d = triage(text, token=token)
+        out[key] = (status, body, d)
+    tokens_after, budget_shown = tokens_and_budget(board())
+    log = [json.loads(l) for l in sh(["docker", "compose", "exec", "-T", "n8n", "cat", "/tmp/fake_openai.log"],
+                                     check=False).splitlines() if l.startswith("{")]
+    # тестовый ключ не должен оказаться в базе n8n и в логах контейнера
+    in_db = secret_in_sqlite(fake_key)
+    in_logs = fake_key in sh(["docker", "compose", "logs", "--no-color", "--since", started, "n8n"], check=False)
+    fake_sha = hashlib.sha256(fake_key.encode()).hexdigest()[:12]
 
     def res(k):
         return (out[k][2].get("result") or {}), (out[k][2].get("meta") or {})
@@ -362,49 +376,92 @@ def check_llm_branch(env, token, spent_before):
     s_b, _, d_b = out["budget"]
     pii_text = json.dumps(rpii, ensure_ascii=False)
     checks = {
-        "HTTP 500 дважды → 200, mode=llm_fallback, needs_human, category=other, $0":
+        "HTTP 500 дважды → 200, mode=llm_fallback, needs_human, category=other, 0 токенов":
             out["http500"][0] == 200 and out["http500"][2].get("mode") == "llm_fallback"
-            and r500.get("needs_human") is True and r500.get("category") == "other" and m500.get("cost_usd") == 0,
+            and r500.get("needs_human") is True and r500.get("category") == "other"
+            and m500.get("tokens_in") == 0 and m500.get("tokens_out") == 0,
         "контакт в ответе модели скрыт (summary, next_step)":
             "[телефон скрыт]" in pii_text and not any(pii_leaked(p, pii_text) for p in
                                                       ("+7 916 123 45 67", "8 916 123-45-67", "ivan.petrov@mail.ru")),
         "контакт в ответе модели → needs_human=true": rpii.get("needs_human") is True,
         "контакты входа и выхода посчитаны (pii_masked > 2)": (mpii.get("pii_masked") or 0) > 2,
-        "расход посчитан по usage": abs((mpii.get("cost_usd") or 0) - FAKE_COST) < 1e-6,
-        "битый JSON один раз → повтор, mode=llm, attempts=2":
+        "токены посчитаны по usage (prompt_tokens, completion_tokens)":
+            mpii.get("tokens_in") == FAKE_IN and mpii.get("tokens_out") == FAKE_OUT,
+        "битый JSON один раз → повтор, mode=llm, attempts=2, токены обеих попыток":
             out["invalid_once"][2].get("mode") == "llm" and mone.get("attempts") == 2
-            and abs((mone.get("cost_usd") or 0) - 2 * FAKE_COST) < 1e-6,
+            and mone.get("tokens_in") == 2 * FAKE_IN and mone.get("tokens_out") == 2 * FAKE_OUT,
         "битый JSON дважды → mode=llm_fallback, needs_human, category=other":
             out["invalid_always"][2].get("mode") == "llm_fallback" and rall.get("needs_human") is True
             and rall.get("category") == "other",
-        "бюджет: следующая заявка 429 daily_budget (токен прогонов бюджет не снимает)":
+        "лимит токенов: следующая заявка 429 daily_budget (токен прогонов лимит не снимает)":
             s_b == 429 and d_b.get("error") == "daily_budget",
-        "отказ вежливый, с суммами": "Дневной бюджет" in (d_b.get("message") or ""),
+        "отказ вежливый, с числами": "Дневной лимит токенов" in (d_b.get("message") or ""),
         "в API ушло 7 запросов (2+1+2+2, отказ по бюджету — до вызова)": len(log) == 7,
         "3 повторных запроса (после 500, битого JSON, снова битого) содержат список ошибок":
             sum(1 for e in log if e.get("retry")) == 3,
         "в запросах к API нет телефона и email": bool(log) and not any(e.get("piiLike") for e in log),
-        "запросы со схемой json_schema и заголовками ключа и версии":
-            bool(log) and all(e.get("schemaOk") and e.get("headerOk") for e in log),
-        "доска показывает временный бюджет": budget_shown is not None and abs(budget_shown - budget) < 1e-4,
+        "запросы в /chat/completions, схема json_schema strict, ключ в Authorization: Bearer":
+            bool(log) and all(str(e.get("path", "")).endswith("/chat/completions") and e.get("schemaOk")
+                              and e.get("headerOk") for e in log),
+        "в заглушку пришёл тестовый ключ, а не настоящий": bool(log) and all(e.get("keySha") == fake_sha for e in log),
+        "доска показывает временный лимит токенов": budget_shown == budget,
         "тестового ключа нет в sqlite n8n": not in_db,
         "тестового ключа нет в логах контейнера": not in_logs,
     }
     result.update({
-        "ok": all(checks.values()) and all(r["env_identical"] for r in report),
+        "ok": all(checks.values()),
         "checks": checks,
         "statuses": {k: v[0] for k, v in out.items()},
         "modes": {k: v[2].get("mode") for k, v in out.items()},
         "attempts": {k: (v[2].get("meta") or {}).get("attempts") for k, v in out.items()},
-        "cost_usd": {k: (v[2].get("meta") or {}).get("cost_usd") for k, v in out.items()},
+        "tokens": {k: [(v[2].get("meta") or {}).get("tokens_in"), (v[2].get("meta") or {}).get("tokens_out")]
+                   for k, v in out.items()},
         "pii_output_result": {"summary": rpii.get("summary"), "next_step": rpii.get("next_step"),
                               "pii_masked": mpii.get("pii_masked")},
         "refusal_message": d_b.get("message"),
-        "board_spent_after_usd": spent_after,
+        "board_tokens_after": tokens_after,
         "fake_api_log": log,
-        "restored": report,
     })
     return result
+
+
+# ---------- секреты: до перезапусков ----------
+
+def read_secret_values():
+    """Настоящие ключ и адрес шлюза: из .env, если заданы там, иначе из ../llm.env."""
+    shared = read_env(SHARED_LLM_ENV) if SHARED_LLM_ENV.exists() else {}
+    local = read_env(".env")
+    out = {}
+    for k in ("LLM_API_KEY", "LLM_BASE_URL"):
+        v = (local.get(k) or shared.get(k) or "").strip().strip('"').strip("'")
+        if v:
+            out[k] = v
+    return out
+
+
+def secret_in_sqlite(value):
+    mp = sh(["docker", "volume", "inspect", "demo-n8n_n8n_data", "-f", "{{.Mountpoint}}"]).strip()
+    b = value.encode()
+    return any(b in p.read_bytes() for p in Path(mp).glob("database.sqlite*") if p.is_file())
+
+
+def check_secrets_at_rest():
+    """Ключ и адрес шлюза есть только в env контейнера: в базе n8n, логах и файлах проекта
+    их быть не должно. Печатаются только да/нет."""
+    secrets_ = read_secret_values()
+    if "LLM_API_KEY" not in secrets_:
+        return {"name": "secrets_at_rest", "ok": None, "skipped": "ключ LLM не задан"}
+    logs = sh(["docker", "compose", "logs", "--no-color", "n8n"], check=False)
+    skip = {".env", BACKUP.name}
+    files = [p for p in Path(".").rglob("*")
+             if p.is_file() and p.name not in skip and ".git" not in p.parts]
+    checks = {}
+    for k, v in secrets_.items():
+        b = v.encode()
+        checks[f"{k}: нет в sqlite n8n"] = not secret_in_sqlite(v)
+        checks[f"{k}: нет в логах контейнера"] = v not in logs
+        checks[f"{k}: нет в файлах проекта (кроме .env)"] = not any(b in p.read_bytes() for p in files)
+    return {"name": "secrets_at_rest", "ok": all(checks.values()), "checks": checks, "files_scanned": len(files)}
 
 
 def guarded(fn, *args):
@@ -416,7 +473,7 @@ def guarded(fn, *args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--no-temp-env", action="store_true", help="только фаза 1, .env не меняется")
+    ap.add_argument("--no-temp-env", action="store_true", help="только фаза 1 на текущих настройках, .env не меняется")
     args = ap.parse_args()
     env = read_env(".env")
     token = env.get("EVAL_BYPASS_TOKEN", "")
@@ -424,23 +481,30 @@ def main():
     mem_before = memory()
     mode_now = board_mode(board())
 
-    results = [guarded(check_xss, token), guarded(check_pii, token), guarded(check_multipart_limit),
-               guarded(check_spoofed_ip, env)]
-    if not args.no_temp_env:
+    def phase1():
+        return [guarded(check_xss, token), guarded(check_pii, token), guarded(check_multipart_limit),
+                guarded(check_spoofed_ip, env)]
+
+    # до перезапусков: логи текущего контейнера при пересоздании пропадут
+    results = [guarded(check_secrets_at_rest)]
+    if args.no_temp_env:
+        if mode_now == "llm":
+            print("внимание: режим LLM, карточка XSS-заявки может быть скрыта модерацией доски", file=sys.stderr)
+        results += phase1()
+    else:
         report = []
         try:
-            with temp_env({"TRUST_PROXY_HEADER": "x-real-ip"}, mode_now, mode_now, report):
+            with env_session(mode_now, report) as apply:
+                apply({"TRIAGE_FORCE_MOCK": "true"}, "mock")
+                results += phase1()
+                apply({"TRIAGE_FORCE_MOCK": "true", "TRUST_PROXY_HEADER": "x-real-ip"}, "mock")
                 results.append(guarded(check_rate_limit_ip, env))
                 results.append(guarded(check_form, env))
+                results.append(guarded(check_llm_branch, env, token, tokens_and_budget(board())[0], apply))
         except Exception as e:  # noqa: BLE001
-            results.append({"name": "phase2", "ok": False, "error": f"{type(e).__name__}: {e}"})
-        results.append({"name": "phase2_env_restored", "ok": bool(report) and all(r["env_identical"] for r in report),
-                        "restored": report})
-        if env.get("ANTHROPIC_API_KEY"):
-            results.append({"name": "llm_branch_and_budget", "ok": None,
-                            "skipped": "задан настоящий ключ API, заглушка не подключалась"})
-        else:
-            results.append(guarded(check_llm_branch, env, token, spent_and_budget(board())[0]))
+            results.append({"name": "temp_env", "ok": False, "error": f"{type(e).__name__}: {e}"})
+        results.append({"name": "env_restored", "ok": bool(report) and all(r["env_identical"] for r in report)
+                        and report[0]["board_mode"] == mode_now, "restored": report})
     mem_after = memory()
 
     for r in results:

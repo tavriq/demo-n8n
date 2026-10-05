@@ -6,8 +6,9 @@
 С рабочей машины через туннель (ssh -L 18102:127.0.0.1:18102 <сервер>):
   EVAL_BYPASS_TOKEN=... python3 evals/run.py --base http://localhost:18102
 
-Пишет evals/results-<дата>-<режим>.json (все строки) и evals/latest.md (отчёт).
-Токен прогонов (EVAL_BYPASS_TOKEN) снимает лимиты в час, дневной бюджет в долларах
+Пишет evals/results-<дата>-<режим>[-<модель>].json (все строки), отчёт с тем же именем .md
+и копию отчёта в evals/latest.md (--no-latest: не трогать latest.md).
+Токен прогонов (EVAL_BYPASS_TOKEN) снимает лимиты в час, дневной лимит токенов
 продолжает действовать. Токен не печатается и не пишется в результаты.
 
 Разметка: evals/cases.jsonl. Значение-список = допустимые варианты, первый из них
@@ -119,6 +120,11 @@ def wilson(k, n, z=1.96):
     return [round(max(0.0, centre - half), 3), round(min(1.0, centre + half), 3)]
 
 
+def p95(xs):
+    """95-й перцентиль, метод ближайшего ранга."""
+    return round(sorted(xs)[max(0, math.ceil(0.95 * len(xs)) - 1)]) if xs else None
+
+
 def ratio(k, n):
     return {"correct": k, "total": n, "rate": round(k / n, 3) if n else None, "ci95": wilson(k, n)}
 
@@ -171,8 +177,11 @@ def run_cases(args, cases, token, post=None):
                                              "confidence", "summary", "next_step"]},
             "checks": {f: grade(exp[f], res.get(f)) for f in GRADED if f in exp},
             "attempts": meta.get("attempts"),
-            "cost_usd": meta.get("cost_usd") or 0,
+            "tokens_in": meta.get("tokens_in") or 0,
+            "tokens_out": meta.get("tokens_out") or 0,
+            "cost_rub": meta.get("cost_rub"),
             "model": meta.get("model"),
+            "reasoning_effort": meta.get("reasoning_effort"),
         })
         if exp.get("pii"):
             row["pii"] = {"items": len(exp["pii"]),
@@ -235,12 +244,15 @@ def summarize(rows, cases, aborted, args, started, cases_sha):
     pii_out_rows = [r for r in ok if "pii_output" in r]
     inj_rows = [r for r in ok if "injection" in r]
     lat = [r["latency_ms"] for r in ok]
-    costs = [r["cost_usd"] for r in ok]
+    tok = [r["tokens_in"] + r["tokens_out"] for r in ok]
+    rub = [r["cost_rub"] for r in ok if r.get("cost_rub") is not None]
     return {
         "date_utc": started.strftime("%Y-%m-%d %H:%M"),
         "mode": mode,
         "modes_seen": modes,
         "models_seen": sorted({r.get("model") for r in ok if r.get("model")}),
+        "reasoning_effort_seen": sorted({r.get("reasoning_effort") for r in ok if r.get("reasoning_effort")}),
+        "gateway": args.gateway or None,
         "n8n_version": args.n8n_version,
         "cases_file": "evals/cases.jsonl",
         "cases_sha256": cases_sha,
@@ -270,10 +282,17 @@ def summarize(rows, cases, aborted, args, started, cases_sha):
                                                   and all(v["lenient"] for v in r["checks"].values()))},
         "latency_ms": {"mean": round(statistics.mean(lat)) if lat else None,
                        "p50": round(statistics.median(lat)) if lat else None,
-                       "p95": round(sorted(lat)[max(0, math.ceil(0.95 * len(lat)) - 1)]) if lat else None,
-                       "max": max(lat) if lat else None},
-        "cost_usd": {"total": round(sum(costs), 6), "mean_per_case": round(statistics.mean(costs), 6) if costs else None},
+                       "p95": p95(lat),
+                       "max": max(lat) if lat else None,
+                       "measured_at": args.latency_note or None},
+        "tokens": {"input": sum(r["tokens_in"] for r in ok), "output": sum(r["tokens_out"] for r in ok),
+                   "per_case_mean": round(statistics.mean(tok)) if tok else None,
+                   "per_case_p50": round(statistics.median(tok)) if tok else None,
+                   "per_case_p95": p95(tok),
+                   "per_case_max": max(tok) if tok else None},
+        "cost_rub": round(sum(rub), 2) if rub and len(rub) == len(ok) else None,
         "llm_retries": sum(1 for r in ok if (r.get("attempts") or 0) >= 2),
+        "llm_fallbacks": sum(1 for r in ok if r.get("mode") == "llm_fallback"),
     }
 
 
@@ -288,18 +307,20 @@ def render_md(s, rows, results_name):
 
     b = s["baseline"]
     nh = s["needs_human"]
+    effort = ", ".join(s.get("reasoning_effort_seen") or [])
     lines = [
-        "# Evals: последний прогон",
+        "# Evals: прогон",
         "",
         f"Дата: {s['date_utc']} UTC · режим: **{s['mode']}** · n8n {s['n8n_version']} · "
-        f"модель: {', '.join(s['models_seen']) or '—'}",
+        f"модель: {', '.join(s['models_seen']) or '—'}" + (f" (reasoning_effort={effort})" if effort else "")
+        + (f" · шлюз: {s['gateway']}" if s.get("gateway") else ""),
         f"Кейсы: {s['cases_total']} из `{s['cases_file']}` (sha256 `{s['cases_sha256'][:12]}`), "
         f"отправлено {s['cases_sent']}, оценено {s['graded']}. Все строки: `evals/{results_name}`.",
         "",
     ]
     if s["mode"] == "mock":
         lines += [
-            "> **Режим mock: Claude не вызывался.** Ответы дала детерминированная заглушка по ключевым словам "
+            "> **Режим mock: LLM не вызывалась.** Ответы дала детерминированная заглушка по ключевым словам "
             "(`src/lib/mock.js`). Эти цифры проверяют контур целиком (вебхук, маскирование, cost guard, "
             "проверка контракта, журнал, ответ), а не качество LLM. Правила заглушки и разметку писал "
             "один автор, поэтому точность заглушки ничего не говорит о модели.",
@@ -333,9 +354,14 @@ def render_md(s, rows, results_name):
         f"| ошибки инфраструктуры | {sum(s['infra_errors'].values())} "
         f"{', '.join(f'{k}: {v}' for k, v in s['infra_errors'].items())} | | |",
         f"| задержка, мс: среднее / p50 / p95 / max | {s['latency_ms']['mean']} / {s['latency_ms']['p50']} / "
-        f"{s['latency_ms']['p95']} / {s['latency_ms']['max']} | | |",
-        f"| стоимость: всего / на заявку | ${s['cost_usd']['total']} / ${s['cost_usd']['mean_per_case']} | | |",
-        f"| повторов запроса к LLM | {s['llm_retries']} | | |",
+        f"{s['latency_ms']['p95']} / {s['latency_ms']['max']}"
+        + (f" ({s['latency_ms']['measured_at']})" if s["latency_ms"].get("measured_at") else "") + " | | |",
+        f"| токены: всего вход / выход | {s['tokens']['input']} / {s['tokens']['output']} | | |",
+        f"| токены на заявку: среднее / p50 / p95 / max | {s['tokens']['per_case_mean']} / {s['tokens']['per_case_p50']} / "
+        f"{s['tokens']['per_case_p95']} / {s['tokens']['per_case_max']} | | |",
+        f"| стоимость | " + (f"{s['cost_rub']} ₽ по ценам из настроек" if s.get("cost_rub") is not None
+                            else "не считается: цены провайдера не заданы") + " | | |",
+        f"| повторов запроса к LLM / заглушек после двух неудач | {s['llm_retries']} / {s['llm_fallbacks']} | | |",
         "",
         f"95% ДИ — интервал Уилсона. На {s['cases_total']} кейсах он широкий (±10–15 п.п.): разница меньше этого — шум.",
         "",
@@ -381,7 +407,8 @@ def self_test(cases):
 
     def reply(text, res, masked):
         return 200, json.dumps({"ok": True, "mode": "mock", "result": res, "meta": {
-            "text_masked": masked, "pii_masked": 0, "attempts": 0, "cost_usd": 0, "model": "mock"}},
+            "text_masked": masked, "pii_masked": 0, "attempts": 0, "tokens_in": 0, "tokens_out": 0,
+            "model": "mock"}},
             ensure_ascii=False), 1
 
     def oracle(method, url, payload, headers):
@@ -404,7 +431,7 @@ def self_test(cases):
     def broken(method, url, payload, headers):
         return 500, "boom", 1
 
-    ns = argparse.Namespace(base="http://stub", pause=0, n8n_version="self-test")
+    ns = argparse.Namespace(base="http://stub", pause=0, n8n_version="self-test", gateway="", latency_note="")
     now = dt.datetime.now(dt.timezone.utc)
     quiet = open(os.devnull, "w")
     out, sys.stdout = sys.stdout, quiet
@@ -439,6 +466,9 @@ def main():
     ap.add_argument("--pause", type=float, default=0.5, help="пауза между заявками, сек")
     ap.add_argument("--n8n-version", default="2.41.6")
     ap.add_argument("--out-dir", default=str(ROOT))
+    ap.add_argument("--gateway", default="", help="подпись шлюза для отчёта, например «Timeweb AI»")
+    ap.add_argument("--latency-note", default="", help="где мерилась задержка, для отчёта")
+    ap.add_argument("--no-latest", action="store_true", help="не перезаписывать evals/latest.md")
     ap.add_argument("--self-test", action="store_true", help="проверить грейдер без сети и выйти")
     args = ap.parse_args()
 
@@ -458,17 +488,25 @@ def main():
     s = summarize(rows, cases, aborted, args, started, hashlib.sha256(raw).hexdigest())
 
     out = Path(args.out_dir)
-    name = f"results-{started:%Y-%m-%d}-{s['mode']}.json"
+    stem = f"results-{started:%Y-%m-%d}-{s['mode']}"
+    if s["mode"] == "llm" and len(s["models_seen"]) == 1:
+        stem += "-" + re.sub(r"[^A-Za-z0-9.]+", "-", s["models_seen"][0].split("/")[-1]).strip("-")
+        if s["reasoning_effort_seen"]:
+            stem += "-" + "-".join(s["reasoning_effort_seen"])
+    name = stem + ".json"
     (out / name).write_text(json.dumps({"summary": s, "rows": rows}, ensure_ascii=False, indent=2) + "\n",
                             encoding="utf-8")
-    (out / "latest.md").write_text(render_md(s, rows, name), encoding="utf-8")
+    report = render_md(s, rows, name)
+    (out / (stem + ".md")).write_text(report, encoding="utf-8")
+    if not args.no_latest:
+        (out / "latest.md").write_text(report, encoding="utf-8")
     a = s["accuracy"]
     print(f"\nрежим {s['mode']}: category {pct(a['category']['strict']['rate'])} строго / "
           f"{pct(a['category']['lenient']['rate'])} с допустимыми; urgency {pct(a['urgency']['lenient']['rate'])}; "
           f"needs_human recall {pct(s['needs_human']['recall']['rate'])}; контакты {s['pii']['items'] - s['pii']['leaked']}"
           f"/{s['pii']['items']}; injection {s['injection']['resisted']}/{s['injection']['cases']}; "
-          f"p50 {s['latency_ms']['p50']} мс; ${s['cost_usd']['total']}")
-    print(f"записано: evals/{name}, evals/latest.md")
+          f"p50 {s['latency_ms']['p50']} мс; токенов {s['tokens']['input'] + s['tokens']['output']}")
+    print(f"записано: evals/{name}, evals/{stem}.md" + ("" if args.no_latest else ", evals/latest.md"))
     sys.exit(1 if aborted or s["infra_errors"] else 0)
 
 
