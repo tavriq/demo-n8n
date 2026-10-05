@@ -1,0 +1,94 @@
+{
+  "date_utc": "2026-10-05 07:51",
+  "results": [
+    {
+      "name": "xss_board",
+      "ok": true,
+      "checks": {
+        "заявка принята (200)": true,
+        "на доске нет тегов <script>": true,
+        "на доске нет тега <img>": true,
+        "текст на доске экранирован": true,
+        "&lt;img … onerror экранирован": true,
+        "строгий CSP в meta": true
+      }
+    },
+    {
+      "name": "pii_masking",
+      "ok": true,
+      "checks": {
+        "заявка принята (200)": true,
+        "найдено и скрыто 4 контакта": true,
+        "в ответе (и сохранённом тексте) контактов нет": true,
+        "на доске контактов нет": true,
+        "на доске метки [телефон скрыт], [email скрыт], [ник скрыт]": true
+      },
+      "text_masked": "Проверка маскирования: нужна аренда генератора, звоните [телефон скрыт] или [телефон скрыт], почта [email скрыт], тг [ник скрыт]"
+    },
+    {
+      "name": "rate_limit_ip",
+      "ok": true,
+      "checks": {
+        "первые 5 заявок с адреса приняты": true,
+        "заявка №6 отклонена 429 rate_limited_ip": true,
+        "отказ вежливый и объясняет лимит": true,
+        "другой адрес не затронут (200)": true
+      },
+      "limit_per_hour": 5,
+      "statuses": [
+        200,
+        200,
+        200,
+        200,
+        200,
+        429,
+        200
+      ],
+      "refusal_message": "Это демо: не больше 5 заявок в час с одного адреса. Попробуйте через час."
+    },
+    {
+      "name": "daily_budget",
+      "spent_before_usd": 0.0,
+      "budget_before_usd": 0.5,
+      "temporary_budget_usd": 0.00869,
+      "reserve_usd": 0.00819,
+      "ok": true,
+      "checks": {
+        "заявка 1 прошла через LLM-ветку (200, mode=llm)": true,
+        "расход заявки 1 посчитан по usage": true,
+        "заявка 2 отклонена 429 daily_budget": true,
+        "токен прогонов бюджет не снимает": true,
+        "отказ вежливый, с суммами": true,
+        "в API ушёл ровно 1 запрос (отказ до вызова)": true,
+        "в запросе к API нет телефона и email": true,
+        "запрос к API со схемой json_schema": true,
+        "доска показывает расход из бюджета": true
+      },
+      "statuses": [
+        200,
+        429
+      ],
+      "cost_usd_request_1": 0.001287,
+      "refusal_message": "Дневной бюджет демо на LLM исчерпан: потрачено $0.0013 из $0.0087. Попробуйте завтра.",
+      "board_spent_after_usd": 0.0013,
+      "board_budget_usd": 0.0087,
+      "fake_api_log": [
+        {
+          "path": "/v1/messages",
+          "model": "claude-haiku-4-5-20251001",
+          "max_tokens": 600,
+          "headerOk": true,
+          "schemaOk": true,
+          "retry": false,
+          "piiLike": false
+        }
+      ],
+      "pii_leak_in_response": false,
+      "restored": {
+        "env_identical": true,
+        "board_mode": "mock",
+        "board_budget_usd": 0.5
+      }
+    }
+  ]
+}
