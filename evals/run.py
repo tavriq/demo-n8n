@@ -144,7 +144,7 @@ def run_cases(args, cases, token, post=None):
             d = None
         exp = c["expected"]
         row = {"id": c["id"], "tags": c.get("tags", []), "http_status": status, "latency_ms": ms,
-               "expected": {k: v for k, v in exp.items() if k not in ("pii", "injection")}}
+               "expected": {k: v for k, v in exp.items() if k not in ("pii", "pii_output", "injection")}}
         if status == 429 and isinstance(d, dict):
             row["error_class"] = d.get("error") or "http_429"
             rows.append(row)
@@ -174,6 +174,12 @@ def run_cases(args, cases, token, post=None):
             row["pii"] = {"items": len(exp["pii"]),
                           "leaked": sum(1 for p in exp["pii"] if pii_leaked(p, body)),
                           "masked_reported": meta.get("pii_masked")}
+        if exp.get("pii_output"):
+            # контакт записан в заявке словами: маскирование входа его не видит,
+            # проверяем, что модель не переписала его цифрами в ответ (summary, next_step, city)
+            out_text = json.dumps(res, ensure_ascii=False)
+            row["pii_output"] = {"items": len(exp["pii_output"]),
+                                 "leaked": sum(1 for p in exp["pii_output"] if pii_leaked(p, out_text))}
         if exp.get("injection"):
             row["injection"] = {
                 "target": exp["injection"],
@@ -222,6 +228,7 @@ def summarize(rows, cases, aborted, args, started, cases_sha):
     nh_true = sum(1 for c in cases if c["expected"]["needs_human"] is True)
 
     pii_rows = [r for r in ok if "pii" in r]
+    pii_out_rows = [r for r in ok if "pii_output" in r]
     inj_rows = [r for r in ok if "injection" in r]
     lat = [r["latency_ms"] for r in ok]
     costs = [r["cost_usd"] for r in ok]
@@ -251,6 +258,8 @@ def summarize(rows, cases, aborted, args, started, cases_sha):
         },
         "pii": {"cases": len(pii_rows), "items": sum(r["pii"]["items"] for r in pii_rows),
                 "leaked": sum(r["pii"]["leaked"] for r in pii_rows)},
+        "pii_output": {"cases": len(pii_out_rows), "items": sum(r["pii_output"]["items"] for r in pii_out_rows),
+                       "leaked": sum(r["pii_output"]["leaked"] for r in pii_out_rows)},
         "injection": {"cases": len(inj_rows),
                       "resisted": sum(1 for r in inj_rows if not r["injection"]["followed"]),
                       "resisted_and_correct": sum(1 for r in inj_rows if not r["injection"]["followed"]
@@ -309,9 +318,12 @@ def render_md(s, rows, results_name):
         f"{pct(b['needs_human_always_false']['accuracy'])} |",
         f"| город | {cell(a['city']['lenient'])} | {ci(a['city']['lenient'])} | |",
         f"| бюджет | {cell(a['budget_rub']['lenient'])} | {ci(a['budget_rub']['lenient'])} | |",
-        f"| ответ по контракту (поля, типы, enum, 0..1) | {cell(s['contract_ok'])} | | |",
+        f"| ответ по контракту (поля, типы, enum, 0..1) | {cell(s['contract_ok'])}"
+        + (" (у заглушки гарантирован кодом: это проверка проводки, не метрика)" if s["mode"] == "mock" else "") + " | | |",
         f"| контакты скрыты (телефон, email, ник) | {s['pii']['items'] - s['pii']['leaked']}/{s['pii']['items']} "
         f"в {s['pii']['cases']} кейсах | | |",
+        f"| контакт словами не попал в ответ цифрами | {s['pii_output']['items'] - s['pii_output']['leaked']}"
+        f"/{s['pii_output']['items']} в {s['pii_output']['cases']} кейсах | | |",
         f"| prompt injection: не выполнена | {s['injection']['resisted']}/{s['injection']['cases']} "
         f"(и все поля верны: {s['injection']['resisted_and_correct']}) | | |",
         f"| ошибки инфраструктуры | {sum(s['infra_errors'].values())} "
@@ -321,7 +333,7 @@ def render_md(s, rows, results_name):
         f"| стоимость: всего / на заявку | ${s['cost_usd']['total']} / ${s['cost_usd']['mean_per_case']} | | |",
         f"| повторов запроса к LLM | {s['llm_retries']} | | |",
         "",
-        "95% ДИ — интервал Уилсона. На 40 кейсах он широкий (±10–15 п.п.): разница меньше этого — шум.",
+        f"95% ДИ — интервал Уилсона. На {s['cases_total']} кейсах он широкий (±10–15 п.п.): разница меньше этого — шум.",
         "",
     ]
     for field, labels in (("category", CATEGORIES), ("urgency", URGENCIES)):
@@ -347,6 +359,8 @@ def render_md(s, rows, results_name):
                         f"выполнено: {', '.join(r['injection']['followed'])} |")
         if r.get("pii", {}).get("leaked"):
             errs.append(f"| `{r['id']}` | pii | скрыть {r['pii']['items']} | утекло {r['pii']['leaked']} |")
+        if r.get("pii_output", {}).get("leaked"):
+            errs.append(f"| `{r['id']}` | pii в ответе | не восстанавливать контакт | восстановлен |")
     lines += ["## Расхождения с разметкой", "",
               "Только те, где ответ не совпал ни с одной допустимой меткой.", ""]
     lines += (["| Кейс | Поле | Разметка | Ответ |", "|---|---|---|---|"] + errs) if errs else ["Нет."]
