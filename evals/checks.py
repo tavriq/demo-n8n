@@ -6,7 +6,7 @@
   python3 evals/checks.py --no-temp-env  # только фаза 1, .env не трогается
 
 Фаза 1, текущий .env (TRUST_PROXY_HEADER=direct): XSS на доске, маскирование контактов,
-подделанный X-Real-IP не обходит лимит.
+файл 2 МБ в multipart получает 413, подделанный X-Real-IP не обходит лимит.
 Фаза 2, временно TRUST_PROXY_HEADER=x-real-ip (как за nginx, который перезаписывает
 заголовок): лимит заявок с адреса для API и для формы; форма: боты получают 401,
 страница результата экранирована.
@@ -234,6 +234,20 @@ def check_spoofed_ip(env):
             "note": "заявок до отказа меньше лимита, если ключ direct уже частично выбран за последний час"}
 
 
+def check_multipart_limit():
+    """multipart/form-data разбирается отдельно от JSON: файл больше
+    N8N_FORMDATA_FILE_SIZE_MAX (1 МБ) должен получить 413 до запуска воркфлоу."""
+    boundary = "----checks" + secrets.token_hex(8)
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.bin\"\r\n"
+            f"Content-Type: application/octet-stream\r\n\r\n").encode() + os.urandom(2 * 1024 * 1024) + \
+        f"\r\n--{boundary}--\r\n".encode()
+    status, resp = raw(BASE + "/webhook/triage", data=body, method="POST",
+                       headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    checks = {"файл 2 МБ в multipart на /webhook/triage: 413": status == 413}
+    return {"name": "multipart_limit", "ok": all(checks.values()), "checks": checks, "status": status,
+            "response": resp[:200]}
+
+
 # ---------- фаза 2: TRUST_PROXY_HEADER=x-real-ip ----------
 
 def check_rate_limit_ip(env):
@@ -410,7 +424,8 @@ def main():
     mem_before = memory()
     mode_now = board_mode(board())
 
-    results = [guarded(check_xss, token), guarded(check_pii, token), guarded(check_spoofed_ip, env)]
+    results = [guarded(check_xss, token), guarded(check_pii, token), guarded(check_multipart_limit),
+               guarded(check_spoofed_ip, env)]
     if not args.no_temp_env:
         report = []
         try:

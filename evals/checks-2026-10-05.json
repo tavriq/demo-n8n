@@ -1,5 +1,10 @@
 {
-  "date_utc": "2026-10-05 07:51",
+  "date_utc": "2026-10-05 08:24",
+  "n8n_mode_at_start": "mock",
+  "memory_n8n": {
+    "before": "379.2MiB / 600MiB",
+    "after": "482.1MiB / 600MiB"
+  },
   "results": [
     {
       "name": "xss_board",
@@ -10,7 +15,7 @@
         "на доске нет тега <img>": true,
         "текст на доске экранирован": true,
         "&lt;img … onerror экранирован": true,
-        "строгий CSP в meta": true
+        "CSP в meta: default-src 'none'": true
       }
     },
     {
@@ -18,21 +23,45 @@
       "ok": true,
       "checks": {
         "заявка принята (200)": true,
-        "найдено и скрыто 4 контакта": true,
+        "найдено и скрыто 6 контактов": true,
         "в ответе (и сохранённом тексте) контактов нет": true,
         "на доске контактов нет": true,
-        "на доске метки [телефон скрыт], [email скрыт], [ник скрыт]": true
+        "на доске метки телефона, email, ника и ссылки": true
       },
-      "text_masked": "Проверка маскирования: нужна аренда генератора, звоните [телефон скрыт] или [телефон скрыт], почта [email скрыт], тг [ник скрыт]"
+      "text_masked": "Нужна аренда генератора на выходные. Звоните [телефон скрыт] или [телефон скрыт], почта [email скрыт] или [email скрыт], тг [ник скрыт], [ссылка скрыта]"
     },
     {
-      "name": "rate_limit_ip",
+      "name": "multipart_limit",
       "ok": true,
       "checks": {
-        "первые 5 заявок с адреса приняты": true,
-        "заявка №6 отклонена 429 rate_limited_ip": true,
+        "файл 2 МБ в multipart на /webhook/triage: 413": true
+      },
+      "status": 413,
+      "response": "{\"code\":413,\"message\":\"The submitted form data exceeds the allowed size.\"}"
+    },
+    {
+      "name": "spoofed_x_real_ip",
+      "ok": true,
+      "checks": {
+        "TRUST_PROXY_HEADER=direct (по умолчанию)": true,
+        "429 rate_limited_ip не позже заявки №6, хотя у каждой свой X-Real-IP": true
+      },
+      "statuses": [
+        200,
+        200,
+        200,
+        429
+      ],
+      "note": "заявок до отказа меньше лимита, если ключ direct уже частично выбран за последний час"
+    },
+    {
+      "name": "rate_limit_ip_api",
+      "ok": true,
+      "checks": {
+        "API: первые 5 заявок с адреса приняты": true,
+        "API: заявка №6 отклонена 429 rate_limited_ip": true,
         "отказ вежливый и объясняет лимит": true,
-        "другой адрес не затронут (200)": true
+        "API: другой адрес не затронут (200)": true
       },
       "limit_per_hour": 5,
       "statuses": [
@@ -47,31 +76,94 @@
       "refusal_message": "Это демо: не больше 5 заявок в час с одного адреса. Попробуйте через час."
     },
     {
-      "name": "daily_budget",
-      "spent_before_usd": 0.0,
-      "budget_before_usd": 0.5,
-      "temporary_budget_usd": 0.00869,
-      "reserve_usd": 0.00819,
+      "name": "form",
       "ok": true,
       "checks": {
-        "заявка 1 прошла через LLM-ветку (200, mode=llm)": true,
-        "расход заявки 1 посчитан по usage": true,
-        "заявка 2 отклонена 429 daily_budget": true,
-        "токен прогонов бюджет не снимает": true,
-        "отказ вежливый, с суммами": true,
-        "в API ушёл ровно 1 запрос (отказ до вызова)": true,
-        "в запросе к API нет телефона и email": true,
-        "запрос к API со схемой json_schema": true,
-        "доска показывает расход из бюджета": true
+        "GET формы с User-Agent curl: 401": true,
+        "POST формы с User-Agent curl: 401, заявка не создаётся": true,
+        "GET формы из браузера: 200 и предупреждение про персональные данные": true,
+        "страница результата: «Заявка разобрана»": true,
+        "страница результата: HTML из заявки показан текстом": true,
+        "страница результата: нет двойного экранирования": true,
+        "страница результата: телефон скрыт": true,
+        "форма: заявки 1–5 с адреса приняты": true,
+        "форма: заявка №6 с того же адреса — отказ про лимит": true,
+        "форма: другой адрес принят": true
       },
-      "statuses": [
-        200,
-        429
-      ],
-      "cost_usd_request_1": 0.001287,
-      "refusal_message": "Дневной бюджет демо на LLM исчерпан: потрачено $0.0013 из $0.0087. Попробуйте завтра.",
-      "board_spent_after_usd": 0.0013,
-      "board_budget_usd": 0.0087,
+      "result_page_excerpt": "Категория: Уборка\nСрочность: обычная\nГород: Казань\nБюджет: не указан\nСуть: Уборка: &lt;b&gt;жирный&lt;/b&gt; &amp; \"кавычки\" — проверка формы: нужна уборка склада в Казани, звоните [телефон скрыт]\nСледующий шаг: Уточнить площадь и тип помещения, рассчитать стоимость уборки.\nНужен человек: нет\nРежим: mock (заглушка без LLM)\nКонтакты в тексте замаскированы: 1\n\nЗаявка появится на публичной доске."
+    },
+    {
+      "name": "phase2_env_restored",
+      "ok": true,
+      "restored": [
+        {
+          "env_keys_changed": [
+            "TRUST_PROXY_HEADER"
+          ],
+          "env_identical": true,
+          "board_mode": "mock"
+        }
+      ]
+    },
+    {
+      "name": "llm_branch_and_budget",
+      "spent_before_usd": 0.0013,
+      "temporary_budget_usd": 0.014674,
+      "reserve_usd": 0.008226,
+      "ok": true,
+      "checks": {
+        "HTTP 500 дважды → 200, mode=llm_fallback, needs_human, category=other, $0": true,
+        "контакт в ответе модели скрыт (summary, next_step)": true,
+        "контакт в ответе модели → needs_human=true": true,
+        "контакты входа и выхода посчитаны (pii_masked > 2)": true,
+        "расход посчитан по usage": true,
+        "битый JSON один раз → повтор, mode=llm, attempts=2": true,
+        "битый JSON дважды → mode=llm_fallback, needs_human, category=other": true,
+        "бюджет: следующая заявка 429 daily_budget (токен прогонов бюджет не снимает)": true,
+        "отказ вежливый, с суммами": true,
+        "в API ушло 7 запросов (2+1+2+2, отказ по бюджету — до вызова)": true,
+        "3 повторных запроса (после 500, битого JSON, снова битого) содержат список ошибок": true,
+        "в запросах к API нет телефона и email": true,
+        "запросы со схемой json_schema и заголовками ключа и версии": true,
+        "доска показывает временный бюджет": true,
+        "тестового ключа нет в sqlite n8n": true,
+        "тестового ключа нет в логах контейнера": true
+      },
+      "statuses": {
+        "http500": 200,
+        "pii_output": 200,
+        "invalid_once": 200,
+        "invalid_always": 200,
+        "budget": 429
+      },
+      "modes": {
+        "http500": "llm_fallback",
+        "pii_output": "llm",
+        "invalid_once": "llm",
+        "invalid_always": "llm_fallback",
+        "budget": null
+      },
+      "attempts": {
+        "http500": 2,
+        "pii_output": 1,
+        "invalid_once": 2,
+        "invalid_always": 2,
+        "budget": null
+      },
+      "cost_usd": {
+        "http500": 0,
+        "pii_output": 0.001287,
+        "invalid_once": 0.002574,
+        "invalid_always": 0.002574,
+        "budget": null
+      },
+      "pii_output_result": {
+        "summary": "Сломался компрессор, клиент просит перезвонить на [телефон скрыт]",
+        "next_step": "Позвонить клиенту по [телефон скрыт] или написать на [email скрыт].",
+        "pii_masked": 5
+      },
+      "refusal_message": "Дневной бюджет демо на LLM исчерпан: потрачено $0.0077 из $0.0147. Попробуйте завтра.",
+      "board_spent_after_usd": 0.0077,
       "fake_api_log": [
         {
           "path": "/v1/messages",
@@ -81,14 +173,73 @@
           "schemaOk": true,
           "retry": false,
           "piiLike": false
+        },
+        {
+          "path": "/v1/messages",
+          "model": "claude-haiku-4-5-20251001",
+          "max_tokens": 600,
+          "headerOk": true,
+          "schemaOk": true,
+          "retry": true,
+          "piiLike": false
+        },
+        {
+          "path": "/v1/messages",
+          "model": "claude-haiku-4-5-20251001",
+          "max_tokens": 600,
+          "headerOk": true,
+          "schemaOk": true,
+          "retry": false,
+          "piiLike": false
+        },
+        {
+          "path": "/v1/messages",
+          "model": "claude-haiku-4-5-20251001",
+          "max_tokens": 600,
+          "headerOk": true,
+          "schemaOk": true,
+          "retry": false,
+          "piiLike": false
+        },
+        {
+          "path": "/v1/messages",
+          "model": "claude-haiku-4-5-20251001",
+          "max_tokens": 600,
+          "headerOk": true,
+          "schemaOk": true,
+          "retry": true,
+          "piiLike": false
+        },
+        {
+          "path": "/v1/messages",
+          "model": "claude-haiku-4-5-20251001",
+          "max_tokens": 600,
+          "headerOk": true,
+          "schemaOk": true,
+          "retry": false,
+          "piiLike": false
+        },
+        {
+          "path": "/v1/messages",
+          "model": "claude-haiku-4-5-20251001",
+          "max_tokens": 600,
+          "headerOk": true,
+          "schemaOk": true,
+          "retry": true,
+          "piiLike": false
         }
       ],
-      "pii_leak_in_response": false,
-      "restored": {
-        "env_identical": true,
-        "board_mode": "mock",
-        "board_budget_usd": 0.5
-      }
+      "restored": [
+        {
+          "env_keys_changed": [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "DAILY_BUDGET_USD"
+          ],
+          "env_identical": true,
+          "board_mode": "mock"
+        }
+      ]
     }
   ]
 }

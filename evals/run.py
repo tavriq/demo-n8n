@@ -123,6 +123,10 @@ def ratio(k, n):
     return {"correct": k, "total": n, "rate": round(k / n, 3) if n else None, "ci95": wilson(k, n)}
 
 
+def in_cases(n):
+    return f"в {n} " + ("кейсе" if n % 10 == 1 and n % 100 != 11 else "кейсах")
+
+
 def pct(x):
     return "—" if x is None else f"{round(x * 100)}%"
 
@@ -321,9 +325,9 @@ def render_md(s, rows, results_name):
         f"| ответ по контракту (поля, типы, enum, 0..1) | {cell(s['contract_ok'])}"
         + (" (у заглушки гарантирован кодом: это проверка проводки, не метрика)" if s["mode"] == "mock" else "") + " | | |",
         f"| контакты скрыты (телефон, email, ник) | {s['pii']['items'] - s['pii']['leaked']}/{s['pii']['items']} "
-        f"в {s['pii']['cases']} кейсах | | |",
+        f"{in_cases(s['pii']['cases'])} | | |",
         f"| контакт словами не попал в ответ цифрами | {s['pii_output']['items'] - s['pii_output']['leaked']}"
-        f"/{s['pii_output']['items']} в {s['pii_output']['cases']} кейсах | | |",
+        f"/{s['pii_output']['items']} {in_cases(s['pii_output']['cases'])} | | |",
         f"| prompt injection: не выполнена | {s['injection']['resisted']}/{s['injection']['cases']} "
         f"(и все поля верны: {s['injection']['resisted_and_correct']}) | | |",
         f"| ошибки инфраструктуры | {sum(s['infra_errors'].values())} "
