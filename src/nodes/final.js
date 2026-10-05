@@ -1,6 +1,18 @@
 // Итог: строка журнала ровно под колонки Data Table triage_log.
+// Ответ модели маскируется ещё раз: контакт, записанный в заявке словами или
+// через «собака/точка», модель могла переписать цифрами в summary или next_step.
 const c = $input.first().json;
-const t = c.triage;
+const t = { ...c.triage };
+let outPii = 0;
+for (const f of ['summary', 'next_step', 'city']) {
+  if (typeof t[f] !== 'string') continue;
+  const m = maskPII(t[f]);
+  if (m.total) { t[f] = m.text; outPii += m.total; }
+}
+if (outPii) {
+  if (t.city && /скрыт/.test(t.city)) t.city = null;
+  t.needs_human = true;
+}
 return [{
   json: {
     ts: c.now_ms,
@@ -9,7 +21,7 @@ return [{
     source: c.source,
     client_key: c.client_key,
     text_masked: c.text_masked,
-    pii_masked: c.pii_masked,
+    pii_masked: c.pii_masked + outPii,
     category: t.category,
     urgency: t.urgency,
     city: t.city,
@@ -22,6 +34,6 @@ return [{
     attempts: c.attempts,
     cost_usd: Math.round((Number(c.cost_usd) || 0) * 1e6) / 1e6,
     model: c.result_mode === 'mock' ? 'mock' : c.model,
-    llm_error: c.llm_error || '',
+    llm_error: outPii ? ('в ответе модели скрыто контактов: ' + outPii + (c.llm_error ? ' | ' + c.llm_error : '')).slice(0, 300) : (c.llm_error || ''),
   },
 }];

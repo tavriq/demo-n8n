@@ -27,7 +27,11 @@ services:
       # Code-ноды читают лимиты и наличие ключа из env; воркфлоу правит только владелец
       N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      # тело запроса до 1 МБ: JSON и urlencoded
       N8N_PAYLOAD_SIZE_MAX: "1"
+      # multipart/form-data разбирается отдельно (formidable), по умолчанию файлы до 200 МБ;
+      # текстовые поля multipart этой настройкой не ограничиваются — нужен лимит на прокси
+      N8N_FORMDATA_FILE_SIZE_MAX: "1"
       # история исполнений: успешные не сохраняются, ошибки живут 72 часа;
       # удалённые записи стираются из sqlite физически каждые 5 минут
       EXECUTIONS_DATA_SAVE_ON_SUCCESS: none

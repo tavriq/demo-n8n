@@ -1,4 +1,4 @@
-// Статическая проверка workflows/*.json: синтаксис Code-нод, связи, отсутствие секретов.
+// Статическая проверка workflows/*.json: синтаксис Code-нод и выражений, связи, отсутствие секретов.
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -19,6 +19,18 @@ for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.json'))) {
       }
     }
   }
+  // выражения n8n вида ={{ ... }}: синтаксис JS
+  const walk = (v, where) => {
+    if (typeof v === 'string') {
+      const m = /^=\{\{([\s\S]*)\}\}$/.exec(v);
+      if (m && !m[1].includes('{{')) {
+        try { new vm.Script('(function ($, $json, $env, $now) { return (' + m[1] + '); })'); } catch (e) {
+          problems++; console.error(f + ' / ' + where + ': выражение: ' + e.message);
+        }
+      }
+    } else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, where);
+  };
+  for (const n of wf.nodes) walk(n.parameters, n.name);
   for (const [src, outs] of Object.entries(wf.connections)) {
     if (!names.has(src)) { problems++; console.error(f + ': связь из неизвестной ноды ' + src); }
     for (const out of outs.main) for (const c of out) {

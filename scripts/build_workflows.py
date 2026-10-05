@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Собирает workflows/*.json из src/: JS Code-нод лежит в отдельных файлах,
-общие функции (src/lib) подклеиваются в начало каждой Code-ноды.
+"""Собирает workflows/*.json из src/: JS Code-нод лежит в отдельных файлах.
+В Code-ноде сначала идёт код самой ноды (функция main), под ним — только те
+объявления из src/lib, которые нода использует (с зависимостями), в конце return main().
 
   python3 scripts/build_workflows.py          # записать workflows/*.json
   python3 scripts/build_workflows.py --check  # упасть, если JSON устарел
 """
 import json
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -37,10 +39,53 @@ def uid(*parts):
     return str(uuid.uuid5(NS, "/".join(parts)))
 
 
+DECL = re.compile(r"^(?:async\s+)?(?:function\s+([A-Za-z_$][\w$]*)|(?:const|let|var)\s+([A-Za-z_$][\w$]*))")
+
+
+def lib_chunks(name):
+    """Делит src/lib/<name>.js на объявления верхнего уровня: имя -> текст
+    (вместе с комментарием над объявлением)."""
+    chunks, order, pending, cur = {}, [], [], None
+    for line in (SRC / "lib" / f"{name}.js").read_text().splitlines():
+        m = DECL.match(line)
+        if m:
+            cur = m.group(1) or m.group(2)
+            chunks[cur] = pending + [line]
+            order.append(cur)
+            pending = []
+        elif line.startswith("//"):
+            # комментарий в нулевой колонке относится к следующему объявлению
+            pending.append(line)
+        elif not line.strip() and pending:
+            pending.append(line)
+        elif cur is not None:
+            chunks[cur].append(line)
+    return [(n, "\n".join(chunks[n]).strip("\n")) for n in order]
+
+
 def js(node_file, libs):
-    head = "\n".join((SRC / "lib" / f"{name}.js").read_text().rstrip() for name in libs)
     body = (SRC / "nodes" / node_file).read_text().rstrip()
-    return f"{head}\n\n// ---- нода ----\n{body}\n" if head else body + "\n"
+    if not libs:
+        return body + "\n"
+    decls = [c for name in libs for c in lib_chunks(name)]
+    names = {n for n, _ in decls}
+    uses = lambda text: {n for n in names if re.search(r"(?<![\w$])" + re.escape(n) + r"(?![\w$])", text)}
+    need, queue = set(), list(uses(body))
+    while queue:
+        n = queue.pop()
+        if n in need:
+            continue
+        need.add(n)
+        queue += [m for m in uses(dict(decls)[n]) if m not in need]
+    lib = "\n\n".join(text for n, text in decls if n in need)
+    lines = body.splitlines()
+    head = []
+    while lines and lines[0].startswith("//"):
+        head.append(lines.pop(0))
+    inner = "\n".join(("  " + l) if l.strip() else "" for l in lines)
+    return ("\n".join(head) + "\nfunction main() {\n" + inner + "\n}\n\n"
+            "// ---- ниже: сгенерировано scripts/build_workflows.py из src/lib (" + ", ".join(libs) + "), не править ----\n"
+            + lib + "\n\nreturn main();\n")
 
 
 def node(wf, name, ntype, version, pos, params, **extra):
@@ -58,6 +103,20 @@ def node(wf, name, ntype, version, pos, params, **extra):
 
 def code(wf, name, pos, node_file, libs=()):
     return node(wf, name, "n8n-nodes-base.code", 2, pos, {"jsCode": js(node_file, libs)})
+
+
+def sticky(wf, name, pos, size, content, color=None):
+    """Заметка на холсте n8n: объясняет группу нод тому, кто открыл воркфлоу."""
+    params = {"content": content, "width": size[0], "height": size[1]}
+    if color:
+        params["color"] = color
+    return node(wf, name, "n8n-nodes-base.stickyNote", 1, pos, params)
+
+
+def esc_expr(field):
+    """Выражение n8n: поле строки «Итог», экранированное для parse_mode=HTML в Telegram."""
+    return ("String($('Итог').first().json." + field + " || '')"
+            ".replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')")
 
 
 def cond(wf, name, left, op_type, operation, right=None):
@@ -179,15 +238,8 @@ def build_core():
         if_node(wf, "Ответ валиден?", (1980, 100), "={{ $json.valid }}", "boolean", "true"),
         llm_http(wf, "Claude API #2 (повтор)", (2200, 0)),
         code(wf, "Проверка ответа #2", (2420, 0), "check2.js", ["triage"]),
-        code(wf, "Итог", (2640, 300), "final.js"),
-        if_node(wf, "Нужен человек или срочно?", (2860, 140),
-                "={{ $json.needs_human === true || $json.urgency === 'high' }}", "boolean", "true"),
-        node(wf, "Telegram менеджеру", "n8n-nodes-base.telegram", 1.2, (3080, 140), {
-            "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-            "text": "={{ 'Заявка: ' + $json.category + ', срочность ' + $json.urgency + '\\n' + $json.summary + '\\nДальше: ' + $json.next_step }}",
-            "additionalFields": {"appendAttribution": False},
-        }, disabled=True, notes="Выключено: включить после добавления credential Telegram Bot API и TELEGRAM_CHAT_ID в .env"),
-        node(wf, "Журнал: записать", "n8n-nodes-base.dataTable", 1.1, (2860, 400), {
+        code(wf, "Итог", (2640, 300), "final.js", ["pii"]),
+        node(wf, "Журнал: записать", "n8n-nodes-base.dataTable", 1.1, (2860, 300), {
             "resource": "row",
             "operation": "insert",
             "dataTableId": table_ref(),
@@ -201,7 +253,42 @@ def build_core():
             },
             "options": {},
         }),
-        code(wf, "Ответ: результат", (3080, 400), "respond.js", ["html"]),
+        if_node(wf, "Нужен человек или срочно?", (3080, 120),
+                "={{ $('Итог').first().json.needs_human === true || $('Итог').first().json.urgency === 'high' }}",
+                "boolean", "true"),
+        node(wf, "Telegram менеджеру", "n8n-nodes-base.telegram", 1.2, (3300, 100), {
+            "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+            "text": ("={{ '<b>Заявка: ' + " + esc_expr("category") + " + '</b>, срочность ' + " + esc_expr("urgency")
+                     + " + '\\n' + " + esc_expr("summary") + " + '\\nДальше: ' + " + esc_expr("next_step") + " }}"),
+            "additionalFields": {"appendAttribution": False, "parse_mode": "HTML"},
+        }, disabled=True, onError="continueRegularOutput", notesInFlow=True,
+            notes="Выключено. Включить: credential Telegram API + TELEGRAM_CHAT_ID в .env (README)"),
+        code(wf, "Ответ: результат", (3080, 420), "respond.js", ["html"]),
+        sticky(wf, "Заметка: ядро", (-40, 480), (560, 220),
+               "## Ядро: один разбор для обоих входов\n"
+               "Вызывается из воркфлоу «Триаж: вход» (вебхук и форма) и возвращает данные последней ноды, "
+               "«Ответ: результат».\n\n«Подготовка»: проверка текста (до 1000 символов), маскирование контактов, "
+               "HMAC-ключ клиента, режим llm или mock."),
+        sticky(wf, "Заметка: cost guard", (620, 480), (560, 240),
+               "## Cost guard: лимиты и бюджет\n"
+               "Журнал за 24 часа из Data Table `triage_log` → решение:\n"
+               "- 5 заявок в час с адреса, 60 в час на форму и 60 на API отдельно → 429;\n"
+               "- расход за сегодня + резерв на две попытки > `DAILY_BUDGET_USD` → 429;\n"
+               "- пустой или длинный текст → 400.\nИсполнения идут по одному, проверка и запись не гоняются.", 4),
+        sticky(wf, "Заметка: LLM", (1500, -300), (1060, 250),
+               "## LLM: structured outputs + 1 повтор\n"
+               "HTTP Request в `/v1/messages`, `output_config.format` = JSON-схема (enum, null). "
+               "«Проверка ответа» проверяет то, чего схема не выражает (confidence 0..1, 20 слов), и считает расход по `usage`. "
+               "Не прошло → повтор со списком ошибок. Снова нет, HTTP-ошибка или сеть → `category=other`, `needs_human=true`.", 6),
+        sticky(wf, "Заметка: mock", (1500, 520), (420, 200),
+               "## Mock без ключа\n"
+               "Пока в `.env` нет `ANTHROPIC_API_KEY`, разбор делает заглушка по ключевым словам (`mode=mock`, $0). "
+               "Весь остальной контур работает как с моделью.", 7),
+        sticky(wf, "Заметка: Telegram", (3240, -200), (440, 260),
+               "## Telegram выключен\n"
+               "Уведомление о жалобах, неясных и срочных заявках. Идёт после записи в журнал, "
+               "ошибка Telegram не ломает приём заявки (`onError: continue`). "
+               "Включить: credential бота, `TELEGRAM_CHAT_ID` в `.env`, убрать `disabled` в `scripts/build_workflows.py`.", 3),
     ]
     c = {}
     connect(c, "Вызов из точки входа", "Подготовка")
@@ -220,11 +307,12 @@ def build_core():
     connect(c, "Claude API #2 (повтор)", "Проверка ответа #2")
     connect(c, "Проверка ответа #2", "Итог")
     connect(c, "Mock-классификатор", "Итог")
-    # ветка уведомления выше ветки ответа: в порядке v1 она исполняется первой,
-    # а последней нодой остаётся «Ответ: результат» — его данные вернутся вызывающему
-    connect(c, "Итог", "Нужен человек или срочно?")
-    connect(c, "Нужен человек или срочно?", "Telegram менеджеру", 0)
     connect(c, "Итог", "Журнал: записать")
+    # сначала запись в журнал, потом уведомление: сбой Telegram не теряет заявку.
+    # Ветка уведомления выше ветки ответа: в порядке v1 она исполняется первой,
+    # а последней нодой остаётся «Ответ: результат» — его данные вернутся вызывающему
+    connect(c, "Журнал: записать", "Нужен человек или срочно?")
+    connect(c, "Нужен человек или срочно?", "Telegram менеджеру", 0)
     connect(c, "Журнал: записать", "Ответ: результат")
     return workflow(CORE_ID, "Триаж: ядро (LLM, cost guard, журнал)", nodes, c,
                     "Маскирование, лимиты, Claude Haiku 4.5 или mock, валидация, запись в Data Table.")
@@ -243,7 +331,9 @@ def build_entry():
             "httpMethod": "POST",
             "path": "triage",
             "responseMode": "responseNode",
-            "options": {},
+            # браузеры с чужих сайтов не получат CORS-разрешение: API нужен
+            # только для evals и smoke, страницы демо его не вызывают
+            "options": {"allowedOrigins": "http://localhost:18102"},
         }, webhookId=uid(wf, "webhook-triage")),
         node(wf, "Разбор (API)", "n8n-nodes-base.executeWorkflow", 1.2, (240, 0), exec_params),
         node(wf, "Ответ API", "n8n-nodes-base.respondToWebhook", 1.4, (480, 0), {
@@ -293,6 +383,12 @@ def build_entry():
             "resumeUnit": "minutes",
             "options": {"appendAttribution": False},
         }, webhookId=uid(wf, "form-completion")),
+        sticky(wf, "Заметка: вход", (-40, -300), (760, 250),
+               "## Вход: вебхук и форма → одно ядро\n"
+               "Form Trigger не разрешает Respond to Webhook в своей ветке, а evals нужен JSON с кодом ответа. "
+               "Поэтому два триггера в одном воркфлоу, а разбор — в под-воркфлоу «Триаж: ядро».\n\n"
+               "Публично открывается только форма. `POST /webhook/triage` — для evals и smoke, "
+               "через прокси его не публиковать."),
     ]
     c = {}
     connect(c, "Webhook POST /triage", "Разбор (API)")
@@ -331,7 +427,7 @@ def build_board():
             }]},
             "returnAll": True,
         }, alwaysOutputData=True, executeOnce=True),
-        code(wf, "HTML доски", (880, 0), "board.js", ["html"]),
+        code(wf, "HTML доски", (880, 0), "board.js", ["html", "moderation"]),
         node(wf, "Ответ: HTML", "n8n-nodes-base.respondToWebhook", 1.4, (1100, 0), {
             "respondWith": "text",
             "responseBody": "={{ $json.html }}",
@@ -343,6 +439,11 @@ def build_board():
                 # свой CSP-заголовок n8n заменяет на sandbox-CSP; строгий CSP — в <meta> страницы
             ]}},
         }),
+        sticky(wf, "Заметка: доска", (-40, -300), (760, 230),
+               "## Публичная доска\n"
+               "Последние 20 строк журнала и «потрачено сегодня $X из $Y». Весь текст экранируется, скриптов нет. "
+               "Текст спама, жалоб, неясных заявок и заявок с грубой лексикой не показывается.\n\n"
+               "Каждый GET — исполнение в общей очереди n8n: на прокси доску кэшировать и ограничивать (README)."),
     ]
     c = {}
     connect(c, "Webhook GET /board", "Таблица: создать, если нет")

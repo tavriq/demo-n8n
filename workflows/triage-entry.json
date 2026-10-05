@@ -17,7 +17,9 @@
         "httpMethod": "POST",
         "path": "triage",
         "responseMode": "responseNode",
-        "options": {}
+        "options": {
+          "allowedOrigins": "http://localhost:18102"
+        }
       },
       "webhookId": "f1d8083c-91e3-54a6-b2f9-e9bf3ee61d5c"
     },
@@ -159,6 +161,21 @@
         }
       },
       "webhookId": "9c99713a-64b2-5406-b445-32bdebb13126"
+    },
+    {
+      "id": "7456c3fc-d664-5ba3-b040-d8af91544835",
+      "name": "Заметка: вход",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -300
+      ],
+      "parameters": {
+        "content": "## Вход: вебхук и форма → одно ядро\nForm Trigger не разрешает Respond to Webhook в своей ветке, а evals нужен JSON с кодом ответа. Поэтому два триггера в одном воркфлоу, а разбор — в под-воркфлоу «Триаж: ядро».\n\nПублично открывается только форма. `POST /webhook/triage` — для evals и smoke, через прокси его не публиковать.",
+        "width": 760,
+        "height": 250
+      }
     }
   ],
   "connections": {

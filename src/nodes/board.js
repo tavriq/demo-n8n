@@ -1,5 +1,7 @@
 // Доска: последние 20 заявок + расход за сегодня. Весь текст пользователя и модели
-// экранируется; внешних ресурсов нет (CSP default-src 'none').
+// экранируется; внешних ресурсов и скриптов нет (CSP: default-src 'none', разрешены
+// только встроенные стили). Текст спама, жалоб, неясных заявок и заявок с грубой
+// лексикой не показывается: его видит только менеджер.
 const pick = (name) => $(name).all().map((i) => i.json).filter((r) => r && r.ts !== undefined && r.ts !== null);
 const latest = pick('Последние 20').sort((a, b) => Number(b.ts) - Number(a.ts)).slice(0, 20);
 const today = pick('Расход за сегодня');
@@ -28,6 +30,15 @@ const cards = latest.map((r) => {
     r.needs_human ? '<span class="tag human">нужен человек</span>' : '',
     '<span class="tag mode">' + escapeHtml(r.mode) + '</span>',
   ].join('');
+  const hidden = hiddenReason(r);
+  if (hidden) {
+    return [
+      '<article class="card hidden">',
+      '<div class="row"><time>' + escapeHtml(when) + '</time><div class="tags">' + tags + '</div></div>',
+      '<p class="muted">Текст скрыт: ' + escapeHtml(hidden) + '.</p>',
+      '</article>',
+    ].join('');
+  }
   const facts = [];
   if (r.city) facts.push('город: ' + escapeHtml(r.city));
   if (r.budget_rub !== null && r.budget_rub !== undefined && r.budget_rub !== '') facts.push('бюджет: ' + escapeHtml(r.budget_rub) + ' ₽');
@@ -77,16 +88,18 @@ time{color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
 .facts{margin:0 0 4px;color:var(--muted);font-size:13px}
 blockquote{margin:8px 0 0;padding:6px 10px;border-left:3px solid var(--line);color:var(--muted);font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
 .empty{color:var(--muted);text-align:center;padding:24px}
+.muted{color:var(--muted);margin:8px 0 0;font-size:13px}
+.card.hidden{opacity:.85}
 </style>
 </head>
 <body>
 <main>
 <h1>Триаж входящих заявок</h1>
-<p class="lead">Демо на n8n: текст заявки разбирается в JSON (категория, срочность, город, бюджет, следующий шаг). Телефоны и email маскируются до сохранения. Всё, что здесь видно, публично.</p>
+<p class="lead">Демо на n8n: текст заявки разбирается в JSON (категория, срочность, город, бюджет, следующий шаг). Телефоны, email и ники маскируются до сохранения. Текст спама, жалоб и неясных заявок здесь не показывается. Всё, что здесь видно, публично.</p>
 <section class="panel" aria-label="Расход">
 <div>Потрачено сегодня: <b>${escapeHtml(formatUsd(spent))}</b> из ${escapeHtml(formatUsd(budget))}</div>
 <div class="meter" role="img" aria-label="${pct}% дневного бюджета"><span style="width:${pct}%"></span></div>
-<p class="small">Режим сейчас: ${escapeHtml(modeNow)}. Лимиты: ${escapeHtml(env('RATE_LIMIT_PER_IP_HOUR', '5'))} заявок в час с адреса, ${escapeHtml(env('RATE_LIMIT_GLOBAL_HOUR', '60'))} в час всего.</p>
+<p class="small">Режим сейчас: ${escapeHtml(modeNow)}. Лимиты: ${escapeHtml(env('RATE_LIMIT_PER_IP_HOUR', '5'))} заявок в час с адреса, ${escapeHtml(env('RATE_LIMIT_GLOBAL_HOUR', '60'))} в час через форму.</p>
 <p class="small"><a href="../form/triage-demo" target="_top">Отправить свою заявку</a></p>
 </section>
 <h2 style="font-size:16px;margin:20px 0 10px">Последние заявки: ${latest.length} из 20</h2>

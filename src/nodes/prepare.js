@@ -32,12 +32,18 @@ const trimmed = raw.replace(/\r\n/g, '\n').trim();
 if (!inputError && !trimmed) inputError = 'empty';
 if (!inputError && trimmed.length > MAX_LEN) inputError = 'too_long';
 
-// IP приходит только от обратного прокси (n8n слушает 127.0.0.1).
-// X-Real-IP прокси перезаписывает; в X-Forwarded-For берём последний адрес,
-// его добавил ближайший к нам прокси, клиент подделать его не может.
+// IP клиента. n8n слушает только 127.0.0.1, адрес может сообщить только обратный прокси,
+// и верить заголовку можно, только если прокси его перезаписывает. Какому заголовку
+// верить, задаёт TRUST_PROXY_HEADER; по умолчанию 'direct': заголовки игнорируются,
+// все заявки делят один ключ (иначе клиент подставил бы свой X-Real-IP и обошёл лимит).
+//   x-real-ip         nginx с proxy_set_header X-Real-IP $remote_addr
+//   cf-connecting-ip  Cloudflare (заголовок ставит сам Cloudflare)
+//   xff-last          последний адрес X-Forwarded-For: его дописал ближайший прокси
+const trust = env('TRUST_PROXY_HEADER', 'direct').toLowerCase();
 let ip = null;
-if (headers['x-real-ip']) ip = String(headers['x-real-ip']).trim();
-else if (headers['x-forwarded-for']) {
+if (trust === 'x-real-ip' || trust === 'cf-connecting-ip') {
+  if (headers[trust]) ip = String(headers[trust]).trim();
+} else if (trust === 'xff-last' && headers['x-forwarded-for']) {
   const parts = String(headers['x-forwarded-for']).split(',').map((s) => s.trim()).filter(Boolean);
   if (parts.length) ip = parts[parts.length - 1];
 }
@@ -85,6 +91,7 @@ const ctx = {
   daily_budget_usd: envNum('DAILY_BUDGET_USD', 0.5),
   limit_ip_hour: envNum('RATE_LIMIT_PER_IP_HOUR', 5),
   limit_global_hour: envNum('RATE_LIMIT_GLOBAL_HOUR', 60),
+  trust_proxy_header: trust,
 };
 if (mode === 'llm' && !inputError) ctx.llm_body = buildLlmBody(ctx.text_masked, model, maxTokens, null);
 return [{ json: ctx }];

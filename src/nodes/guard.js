@@ -10,6 +10,9 @@ const hourAgo = ctx.now_ms - 3600 * 1000;
 // но их расход входит в дневной бюджет
 const lastHour = rows.filter((r) => Number(r.ts) >= hourAgo && r.source !== 'eval');
 const ipHour = lastHour.filter((r) => r.client_key === ctx.client_key).length;
+// общий лимит считается отдельно для формы и для API: скрипт, выбравший лимит API,
+// не закрывает форму для посетителей. Деньги при этом защищает дневной бюджет.
+const sourceHour = lastHour.filter((r) => r.source === ctx.source).length;
 const spentToday = rows
   .filter((r) => r.day === ctx.day)
   .reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
@@ -22,7 +25,7 @@ if (ctx.input_error) {
 } else if (!ctx.bypass_hourly && ipHour >= ctx.limit_ip_hour) {
   decision = 'rate_limited_ip';
   httpStatus = 429;
-} else if (!ctx.bypass_hourly && lastHour.length >= ctx.limit_global_hour) {
+} else if (!ctx.bypass_hourly && sourceHour >= ctx.limit_global_hour) {
   decision = 'rate_limited_global';
   httpStatus = 429;
 } else if (ctx.mode === 'llm' && spentToday + ctx.reserve_usd > ctx.daily_budget_usd) {
@@ -39,5 +42,6 @@ return [{
     spent_today_usd: Math.round(spentToday * 1e6) / 1e6,
     ip_requests_last_hour: ipHour,
     requests_last_hour: lastHour.length,
+    source_requests_last_hour: sourceHour,
   },
 }];
