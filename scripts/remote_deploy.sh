@@ -53,5 +53,6 @@ docker compose run --rm --no-deps -T --entrypoint sh n8n -c \
 
 echo "-- запуск"
 docker compose up -d --wait n8n
+python3 scripts/wait_published.py
 
 bash scripts/smoke.sh
