@@ -6,7 +6,7 @@ const messages = {
   too_long: 'Текст длиннее 1000 символов (' + c.text_len + '). Сократите и отправьте снова.',
   rate_limited_ip: 'Это демо: не больше ' + c.limit_ip_hour + ' заявок в час с одного адреса. Попробуйте через час.',
   rate_limited_global: 'Демо перегружено: общий лимит ' + c.limit_global_hour + ' заявок в час ' + (c.source === 'form' ? 'через форму' : 'через API') + ' исчерпан. Попробуйте позже.',
-  daily_budget: 'Дневной бюджет демо на LLM исчерпан: потрачено ' + formatUsd(c.spent_today_usd) + ' из ' + formatUsd(c.daily_budget_usd) + '. Попробуйте завтра.',
+  daily_budget: 'Дневной лимит токенов демо на LLM исчерпан: израсходовано ' + formatInt(c.tokens_today) + ' из ' + formatInt(c.daily_token_budget) + '. Попробуйте завтра.',
 };
 const message = messages[c.decision] || 'Заявку не удалось принять.';
 return [{
@@ -17,8 +17,8 @@ return [{
       ok: false,
       error: c.decision,
       message,
-      spent_today_usd: c.spent_today_usd,
-      daily_budget_usd: c.daily_budget_usd,
+      tokens_today: c.tokens_today,
+      daily_token_budget: c.daily_token_budget,
     },
     form_title: 'Заявка не принята',
     form_message: escapeHtml(message),

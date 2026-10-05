@@ -19,7 +19,9 @@ OUT = ROOT / "workflows"
 CORE_ID = "triageCoreFlow01"
 ENTRY_ID = "triageEntryFlow1"
 BOARD_ID = "triageBoardFlow1"
-TABLE = "triage_log"
+# v2: учёт в токенах вместо долларов. Data Table нельзя дополнить колонками через ноду,
+# поэтому новая таблица; triage_log (v1, cost_usd) осталась от mock-периода и не читается
+TABLE = "triage_log_v2"
 
 # колонки журнала: имя -> тип Data Table
 COLUMNS = [
@@ -28,7 +30,7 @@ COLUMNS = [
     ("category", "string"), ("urgency", "string"), ("city", "string"), ("budget_rub", "number"),
     ("summary", "string"), ("next_step", "string"), ("needs_human", "boolean"),
     ("confidence", "number"), ("mode", "string"), ("attempts", "number"),
-    ("cost_usd", "number"), ("model", "string"), ("llm_error", "string"),
+    ("tokens_in", "number"), ("tokens_out", "number"), ("model", "string"), ("llm_error", "string"),
 ]
 
 NS = uuid.UUID("6f1c2a52-0f7e-4d8a-9a51-3c1d2b7e9f00")
@@ -192,13 +194,13 @@ def workflow(wid, name, nodes, conns, description):
 
 
 def llm_http(wf, name, pos):
+    """OpenAI-совместимый POST {LLM_BASE_URL}/chat/completions; адрес и ключ только из env."""
     return node(wf, name, "n8n-nodes-base.httpRequest", 4.2, pos, {
         "method": "POST",
-        "url": "={{ ($env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\\/+$/, '') + '/v1/messages' }}",
+        "url": "={{ String($env.LLM_BASE_URL || '').replace(/\\/+$/, '') + '/chat/completions' }}",
         "sendHeaders": True,
         "headerParameters": {"parameters": [
-            {"name": "x-api-key", "value": "={{ $env.ANTHROPIC_API_KEY }}"},
-            {"name": "anthropic-version", "value": "2023-06-01"},
+            {"name": "Authorization", "value": "={{ 'Bearer ' + $env.LLM_API_KEY }}"},
         ]},
         "sendBody": True,
         "specifyBody": "json",
@@ -233,10 +235,10 @@ def build_core():
         code(wf, "Отказ", (1320, 520), "refuse.js", ["html"]),
         if_node(wf, "Есть ключ API?", (1320, 200), "={{ $json.mode }}", "string", "equals", "llm"),
         code(wf, "Mock-классификатор", (1540, 360), "mock.js", ["mock"]),
-        llm_http(wf, "Claude API #1", (1540, 100)),
+        llm_http(wf, "LLM API #1", (1540, 100)),
         code(wf, "Проверка ответа #1", (1760, 100), "check1.js", ["triage"]),
         if_node(wf, "Ответ валиден?", (1980, 100), "={{ $json.valid }}", "boolean", "true"),
-        llm_http(wf, "Claude API #2 (повтор)", (2200, 0)),
+        llm_http(wf, "LLM API #2 (повтор)", (2200, 0)),
         code(wf, "Проверка ответа #2", (2420, 0), "check2.js", ["triage"]),
         code(wf, "Итог", (2640, 300), "final.js", ["pii"]),
         node(wf, "Журнал: записать", "n8n-nodes-base.dataTable", 1.1, (2860, 300), {
@@ -263,7 +265,7 @@ def build_core():
             "additionalFields": {"appendAttribution": False, "parse_mode": "HTML"},
         }, disabled=True, onError="continueRegularOutput", notesInFlow=True,
             notes="Выключено. Включить: credential Telegram API + TELEGRAM_CHAT_ID в .env (README)"),
-        code(wf, "Ответ: результат", (3080, 420), "respond.js", ["html"]),
+        code(wf, "Ответ: результат", (3080, 420), "respond.js", ["html", "triage"]),
         sticky(wf, "Заметка: ядро", (-40, 480), (560, 220),
                "## Ядро: один разбор для обоих входов\n"
                "Вызывается из воркфлоу «Триаж: вход» (вебхук и форма) и возвращает данные последней ноды, "
@@ -271,18 +273,20 @@ def build_core():
                "HMAC-ключ клиента, режим llm или mock."),
         sticky(wf, "Заметка: cost guard", (620, 480), (560, 240),
                "## Cost guard: лимиты и бюджет\n"
-               "Журнал за 24 часа из Data Table `triage_log` → решение:\n"
+               "Журнал за 24 часа из Data Table `triage_log_v2` → решение:\n"
                "- 5 заявок в час с адреса, 60 в час на форму и 60 на API отдельно → 429;\n"
-               "- расход за сегодня + резерв на две попытки > `DAILY_BUDGET_USD` → 429;\n"
+               "- токенов за сегодня + резерв на две попытки > `DAILY_TOKEN_BUDGET` → 429;\n"
                "- пустой или длинный текст → 400.\nИсполнения идут по одному, проверка и запись не гоняются.", 4),
         sticky(wf, "Заметка: LLM", (1500, -300), (1060, 250),
                "## LLM: structured outputs + 1 повтор\n"
-               "HTTP Request в `/v1/messages`, `output_config.format` = JSON-схема (enum, null). "
-               "«Проверка ответа» проверяет то, чего схема не выражает (confidence 0..1, 20 слов), и считает расход по `usage`. "
+               "HTTP Request в OpenAI-совместимый `{LLM_BASE_URL}/chat/completions`, `response_format` = JSON-схема "
+               "(strict, enum, null). «Проверка ответа» проверяет то, чего схема не выражает (confidence 0..1, 20 слов), "
+               "и считает токены по `usage`. "
                "Не прошло → повтор со списком ошибок. Снова нет, HTTP-ошибка или сеть → `category=other`, `needs_human=true`.", 6),
         sticky(wf, "Заметка: mock", (1500, 520), (420, 200),
                "## Mock без ключа\n"
-               "Пока в `.env` нет `ANTHROPIC_API_KEY`, разбор делает заглушка по ключевым словам (`mode=mock`, $0). "
+               "Пока не заданы `LLM_API_KEY` и `LLM_BASE_URL`, разбор делает заглушка по ключевым словам "
+               "(`mode=mock`, 0 токенов). "
                "Весь остальной контур работает как с моделью.", 7),
         sticky(wf, "Заметка: Telegram", (3240, -200), (440, 260),
                "## Telegram выключен\n"
@@ -298,13 +302,13 @@ def build_core():
     connect(c, "Cost guard", "Разрешено?")
     connect(c, "Разрешено?", "Есть ключ API?", 0)
     connect(c, "Разрешено?", "Отказ", 1)
-    connect(c, "Есть ключ API?", "Claude API #1", 0)
+    connect(c, "Есть ключ API?", "LLM API #1", 0)
     connect(c, "Есть ключ API?", "Mock-классификатор", 1)
-    connect(c, "Claude API #1", "Проверка ответа #1")
+    connect(c, "LLM API #1", "Проверка ответа #1")
     connect(c, "Проверка ответа #1", "Ответ валиден?")
     connect(c, "Ответ валиден?", "Итог", 0)
-    connect(c, "Ответ валиден?", "Claude API #2 (повтор)", 1)
-    connect(c, "Claude API #2 (повтор)", "Проверка ответа #2")
+    connect(c, "Ответ валиден?", "LLM API #2 (повтор)", 1)
+    connect(c, "LLM API #2 (повтор)", "Проверка ответа #2")
     connect(c, "Проверка ответа #2", "Итог")
     connect(c, "Mock-классификатор", "Итог")
     connect(c, "Итог", "Журнал: записать")
@@ -315,7 +319,7 @@ def build_core():
     connect(c, "Нужен человек или срочно?", "Telegram менеджеру", 0)
     connect(c, "Журнал: записать", "Ответ: результат")
     return workflow(CORE_ID, "Триаж: ядро (LLM, cost guard, журнал)", nodes, c,
-                    "Маскирование, лимиты, Claude Haiku 4.5 или mock, валидация, запись в Data Table.")
+                    "Маскирование, лимиты, LLM (OpenAI-совместимый API) или mock, валидация, запись в Data Table.")
 
 
 def build_entry():
@@ -427,7 +431,7 @@ def build_board():
             }]},
             "returnAll": True,
         }, alwaysOutputData=True, executeOnce=True),
-        code(wf, "HTML доски", (880, 0), "board.js", ["html", "moderation"]),
+        code(wf, "HTML доски", (880, 0), "board.js", ["html", "moderation", "triage"]),
         node(wf, "Ответ: HTML", "n8n-nodes-base.respondToWebhook", 1.4, (1100, 0), {
             "respondWith": "text",
             "responseBody": "={{ $json.html }}",
@@ -441,7 +445,7 @@ def build_board():
         }),
         sticky(wf, "Заметка: доска", (-40, -300), (760, 230),
                "## Публичная доска\n"
-               "Последние 20 строк журнала и «потрачено сегодня $X из $Y». Весь текст экранируется, скриптов нет. "
+               "Последние 20 строк журнала и «токенов сегодня X из Y». Весь текст экранируется, скриптов нет. "
                "Текст спама, жалоб, неясных заявок и заявок с грубой лексикой не показывается.\n\n"
                "Каждый GET — исполнение в общей очереди n8n: на прокси доску кэшировать и ограничивать (README)."),
     ]
@@ -452,7 +456,7 @@ def build_board():
     connect(c, "Расход за сегодня", "HTML доски")
     connect(c, "HTML доски", "Ответ: HTML")
     return workflow(BOARD_ID, "Триаж: публичная доска", nodes, c,
-                    "GET /webhook/board: последние 20 заявок и расход за сегодня, HTML без внешних ресурсов.")
+                    "GET /webhook/board: последние 20 заявок и токены за сегодня, HTML без внешних ресурсов.")
 
 
 def main():

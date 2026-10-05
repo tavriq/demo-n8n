@@ -1,4 +1,4 @@
-// Mock-режим: заглушка по ключевым словам вместо LLM, стоимость 0.
+// Mock-режим: заглушка по ключевым словам вместо LLM, 0 токенов.
 const ctx = $input.first().json;
 return [{
   json: {
@@ -6,7 +6,8 @@ return [{
     triage: mockTriage(ctx.text_masked),
     result_mode: 'mock',
     attempts: 0,
-    cost_usd: 0,
+    tokens_in: 0,
+    tokens_out: 0,
     llm_error: null,
     warnings: [],
   },

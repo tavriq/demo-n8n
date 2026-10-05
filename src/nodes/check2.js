@@ -1,12 +1,16 @@
-// Проверка ответа Claude, попытка 2 (последняя). Снова невалидно -> заглушка needs_human=true.
+// Проверка ответа модели, попытка 2 (последняя). Снова невалидно -> заглушка needs_human=true.
 const prev = $('Проверка ответа #1').first().json;
-const r = parseLlmResponse($input.first().json, prev.price_in, prev.price_out);
+const r = parseLlmResponse($input.first().json);
 const base = { ...prev };
 delete base.llm_body;
-const cost = (Number(prev.cost_usd) || 0) + r.cost_usd;
+// токены обеих попыток: за первую тоже заплачено
+const tokens = {
+  tokens_in: (Number(prev.tokens_in) || 0) + r.usage.input_tokens,
+  tokens_out: (Number(prev.tokens_out) || 0) + r.usage.output_tokens,
+};
 if (r.ok) {
-  return [{ json: { ...base, valid: true, triage: r.value, result_mode: 'llm', attempts: 2,
-    cost_usd: cost, usage: r.usage, llm_error: null, warnings: (r.warnings || []).concat(['со второй попытки']) } }];
+  return [{ json: { ...base, ...tokens, valid: true, triage: r.value, result_mode: 'llm', attempts: 2,
+    llm_error: null, warnings: (r.warnings || []).concat(['со второй попытки']) } }];
 }
-return [{ json: { ...base, valid: false, triage: fallbackTriage(), result_mode: 'llm_fallback', attempts: 2,
-  cost_usd: cost, llm_error: (prev.llm_error + ' | ' + r.errors.join('; ')).slice(0, 300), warnings: [] } }];
+return [{ json: { ...base, ...tokens, valid: false, triage: fallbackTriage(), result_mode: 'llm_fallback', attempts: 2,
+  llm_error: (prev.llm_error + ' | ' + r.errors.join('; ')).slice(0, 300), warnings: [] } }];

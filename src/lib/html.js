@@ -8,9 +8,13 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function formatUsd(x) {
-  const n = Number(x) || 0;
-  return '$' + n.toFixed(4).replace(/0{1,2}$/, '');
+// 200000 -> «200 000» (неразрывный пробел между разрядами)
+function formatInt(x) {
+  return String(Math.round(Number(x) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
+}
+
+function formatRub(x) {
+  return (Number(x) || 0).toFixed(2) + '\u00a0₽';
 }
 
 const LABEL_CATEGORY = {

@@ -1,4 +1,4 @@
-// Доска: последние 20 заявок + расход за сегодня. Весь текст пользователя и модели
+// Доска: последние 20 заявок + токены за сегодня. Весь текст пользователя и модели
 // экранируется; внешних ресурсов и скриптов нет (CSP: default-src 'none', разрешены
 // только встроенные стили). Текст спама, жалоб, неясных заявок и заявок с грубой
 // лексикой не показывается: его видит только менеджер.
@@ -10,11 +10,24 @@ const env = (name, def) => {
   const v = $env[name];
   return v === undefined || v === null || String(v).trim() === '' ? def : String(v).trim();
 };
-const budget = Number(env('DAILY_BUDGET_USD', '0.5')) || 0.5;
-const spent = today.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
-const pct = Math.min(100, Math.round((spent / budget) * 100));
-const live = env('ANTHROPIC_API_KEY', '') !== '' && env('TRIAGE_FORCE_MOCK', 'false').toLowerCase() !== 'true';
-const modeNow = live ? 'LLM (' + env('LLM_MODEL', 'claude-haiku-4-5-20251001') + ')' : 'mock: ключ API не задан, работает заглушка по ключевым словам';
+const price = (name) => {
+  const v = env(name, '');
+  const n = Number(v.replace(',', '.'));
+  return v !== '' && Number.isFinite(n) && n >= 0 ? n : null;
+};
+const budget = Math.round(Number(env('DAILY_TOKEN_BUDGET', '200000'))) || 200000;
+const tokensIn = today.reduce((s, r) => s + (Number(r.tokens_in) || 0), 0);
+const tokensOut = today.reduce((s, r) => s + (Number(r.tokens_out) || 0), 0);
+const used = tokensIn + tokensOut;
+const pct = Math.min(100, Math.round((used / budget) * 100));
+// рубли только при заданных ценах: цены провайдера в коде не зашиты
+const rub = costRub(tokensIn, tokensOut, price('PRICE_RUB_PER_1M_INPUT'), price('PRICE_RUB_PER_1M_OUTPUT'));
+const model = env('LLM_MODEL', env('LLM_MODEL_SMART', ''));
+const forced = env('TRIAGE_FORCE_MOCK', 'false').toLowerCase() === 'true';
+const live = env('LLM_API_KEY', '') !== '' && env('LLM_BASE_URL', '') !== '' && model !== '' && !forced;
+const modeNow = live ? 'LLM (' + model + ')'
+  : (forced ? 'mock: модель отключена настройкой, работает заглушка по ключевым словам'
+    : 'mock: ключ API не задан, работает заглушка по ключевым словам');
 const tz = 'Europe/Moscow';
 
 const cut = (s, n) => {
@@ -97,8 +110,8 @@ blockquote{margin:8px 0 0;padding:6px 10px;border-left:3px solid var(--line);col
 <h1>Триаж входящих заявок</h1>
 <p class="lead">Демо на n8n: текст заявки разбирается в JSON (категория, срочность, город, бюджет, следующий шаг). Телефоны, email и ники маскируются до сохранения. Текст спама, жалоб и неясных заявок здесь не показывается. Всё, что здесь видно, публично.</p>
 <section class="panel" aria-label="Расход">
-<div>Потрачено сегодня: <b>${escapeHtml(formatUsd(spent))}</b> из ${escapeHtml(formatUsd(budget))}</div>
-<div class="meter" role="img" aria-label="${pct}% дневного бюджета"><span style="width:${pct}%"></span></div>
+<div>Токенов сегодня: <b>${escapeHtml(formatInt(used))}</b> из ${escapeHtml(formatInt(budget))}${rub !== null ? ' · ≈ ' + escapeHtml(formatRub(rub)) + ' по ценам из настроек' : ''}</div>
+<div class="meter" role="img" aria-label="${pct}% дневного лимита токенов"><span style="width:${pct}%"></span></div>
 <p class="small">Режим сейчас: ${escapeHtml(modeNow)}. Лимиты: ${escapeHtml(env('RATE_LIMIT_PER_IP_HOUR', '5'))} заявок в час с адреса, ${escapeHtml(env('RATE_LIMIT_GLOBAL_HOUR', '60'))} в час через форму.</p>
 <p class="small"><a href="../form/triage-demo" target="_top">Отправить свою заявку</a></p>
 </section>

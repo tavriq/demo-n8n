@@ -1,5 +1,5 @@
 // Контракт результата триажа: JSON-схема для structured outputs, промпт,
-// сборка запроса к Messages API, разбор ответа, проверка и подсчёт стоимости.
+// сборка запроса к OpenAI-совместимому chat/completions, разбор ответа, проверка, учёт токенов.
 const TRIAGE_CATEGORIES = ['repair', 'rental', 'cleaning', 'consultation', 'complaint', 'spam', 'other'];
 const TRIAGE_URGENCIES = ['low', 'normal', 'high'];
 const TRIAGE_FIELDS = ['category', 'urgency', 'city', 'budget_rub', 'summary', 'next_step', 'needs_human', 'confidence'];
@@ -53,19 +53,27 @@ function stripRequestTags(text) {
   return String(text == null ? '' : text).replace(/<\s*\/?\s*заявк\p{L}*[^>]*>/giu, '[тег удалён]');
 }
 
-function buildLlmBody(maskedText, model, maxTokens, feedback) {
+// Тело запроса POST {LLM_BASE_URL}/chat/completions. Схема передаётся как
+// response_format json_schema (strict); ответ всё равно проверяет validateTriage.
+// reasoning_effort нужен рассуждающим моделям (minimal: иначе модель тратит весь
+// лимит ответа на рассуждения и возвращает пустой content); пусто — не передаётся.
+function buildLlmBody(maskedText, model, maxTokens, feedback, reasoningEffort) {
   let user = '<заявка>\n' + stripRequestTags(maskedText) + '\n</заявка>';
   if (feedback && feedback.length) {
     user += '\n\nПредыдущий ответ не прошёл проверку: ' + feedback.join('; ') + '. Верни корректный JSON по схеме.';
   }
-  return {
+  const body = {
     model,
-    max_tokens: maxTokens,
+    max_completion_tokens: maxTokens,
     temperature: 0,
-    system: TRIAGE_SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: user }],
-    output_config: { format: { type: 'json_schema', schema: TRIAGE_SCHEMA } },
+    messages: [
+      { role: 'system', content: TRIAGE_SYSTEM_PROMPT },
+      { role: 'user', content: user },
+    ],
+    response_format: { type: 'json_schema', json_schema: { name: 'triage', strict: true, schema: TRIAGE_SCHEMA } },
   };
+  if (reasoningEffort) body.reasoning_effort = reasoningEffort;
+  return body;
 }
 
 function countWords(s) {
@@ -143,44 +151,60 @@ function validateTriage(obj) {
   };
 }
 
-// Стоимость по usage из ответа API. Кэш-токены учтены по стандартным множителям
-// (запись 1.25x, чтение 0.1x от цены входа); в этом воркфлоу кэш не включается.
-function llmCostUsd(usage, priceIn, priceOut) {
-  if (!usage) return 0;
-  const inp = Number(usage.input_tokens) || 0;
-  const out = Number(usage.output_tokens) || 0;
-  const cw = Number(usage.cache_creation_input_tokens) || 0;
-  const cr = Number(usage.cache_read_input_tokens) || 0;
-  return (inp * priceIn + cw * priceIn * 1.25 + cr * priceIn * 0.1 + out * priceOut) / 1e6;
+// Токены из usage ответа chat/completions. Рассуждения модели (reasoning_tokens)
+// уже входят в completion_tokens.
+function llmTokens(usage) {
+  if (!usage || typeof usage !== 'object') return { input_tokens: 0, output_tokens: 0 };
+  return {
+    input_tokens: Math.max(0, Math.round(Number(usage.prompt_tokens) || 0)),
+    output_tokens: Math.max(0, Math.round(Number(usage.completion_tokens) || 0)),
+  };
 }
 
-// Разбор выхода HTTP Request ноды (fullResponse + neverError).
-function parseLlmResponse(http, priceIn, priceOut) {
-  if (!http || typeof http !== 'object') return { ok: false, errors: ['пустой ответ HTTP-ноды'], cost_usd: 0, usage: null };
+// Стоимость в рублях, только если обе цены заданы в .env (руб. за 1 млн токенов).
+// Цен по умолчанию нет: без них учёт идёт только в токенах.
+function costRub(tokensIn, tokensOut, priceIn, priceOut) {
+  if (priceIn === null || priceIn === undefined || priceOut === null || priceOut === undefined) return null;
+  return Math.round(((Number(tokensIn) || 0) * priceIn + (Number(tokensOut) || 0) * priceOut) / 1e4) / 100;
+}
+
+// Текст ошибки уходит в журнал: адреса из него вырезаются, чтобы туда не попал
+// адрес шлюза (в нём бывает идентификатор аккаунта).
+function cleanError(msg) {
+  return String(msg == null ? '' : msg).replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[адрес]').slice(0, 120);
+}
+
+// Разбор выхода HTTP Request ноды (fullResponse + neverError) для chat/completions.
+function parseLlmResponse(http) {
+  if (!http || typeof http !== 'object') return { ok: false, errors: ['пустой ответ HTTP-ноды'], usage: llmTokens(null) };
   if (http.error) {
     const msg = typeof http.error === 'string' ? http.error : (http.error.message || 'ошибка сети');
-    return { ok: false, errors: ['сеть: ' + String(msg).slice(0, 120)], cost_usd: 0, usage: null };
+    return { ok: false, errors: ['сеть: ' + cleanError(msg)], usage: llmTokens(null) };
   }
   const status = Number(http.statusCode);
   const body = http.body;
   if (status !== 200) {
-    const t = body && body.error && body.error.type ? body.error.type : 'unknown';
-    return { ok: false, errors: ['HTTP ' + status + ' ' + t], cost_usd: 0, usage: null };
+    const e = body && typeof body === 'object' && body.error && typeof body.error === 'object' ? body.error : {};
+    const t = String(e.type || e.code || 'unknown').slice(0, 40);
+    return { ok: false, errors: ['HTTP ' + status + ' ' + cleanError(t)], usage: llmTokens(null) };
   }
-  if (!body || typeof body !== 'object') return { ok: false, errors: ['тело ответа не JSON'], cost_usd: 0, usage: null };
-  const usage = body.usage || null;
-  const cost = llmCostUsd(usage, priceIn, priceOut);
-  const usageShort = usage ? { input_tokens: usage.input_tokens || 0, output_tokens: usage.output_tokens || 0 } : null;
-  if (body.stop_reason === 'refusal') return { ok: false, errors: ['модель отказалась (refusal)'], cost_usd: cost, usage: usageShort };
-  if (body.stop_reason === 'max_tokens') return { ok: false, errors: ['ответ обрезан по max_tokens'], cost_usd: cost, usage: usageShort };
-  const block = Array.isArray(body.content) ? body.content.find((b) => b && b.type === 'text') : null;
-  if (!block) return { ok: false, errors: ['нет текстового блока'], cost_usd: cost, usage: usageShort };
+  if (!body || typeof body !== 'object') return { ok: false, errors: ['тело ответа не JSON'], usage: llmTokens(null) };
+  const usage = llmTokens(body.usage);
+  const choice = Array.isArray(body.choices) ? body.choices[0] : null;
+  if (!choice || typeof choice !== 'object') return { ok: false, errors: ['нет choices в ответе'], usage };
+  const msg = choice.message || {};
+  if (msg.refusal) return { ok: false, errors: ['модель отказалась (refusal)'], usage };
+  if (choice.finish_reason === 'length') return { ok: false, errors: ['ответ обрезан по max_completion_tokens'], usage };
+  if (choice.finish_reason === 'content_filter') return { ok: false, errors: ['ответ заблокирован фильтром'], usage };
+  let text = msg.content;
+  if (Array.isArray(text)) text = text.map((p) => (p && typeof p.text === 'string' ? p.text : '')).join('');
+  if (typeof text !== 'string' || !text.trim()) return { ok: false, errors: ['пустой ответ модели'], usage };
   let parsed;
-  try { parsed = JSON.parse(block.text); } catch (e) {
-    return { ok: false, errors: ['невалидный JSON'], cost_usd: cost, usage: usageShort };
+  try { parsed = JSON.parse(text); } catch (e) {
+    return { ok: false, errors: ['невалидный JSON'], usage };
   }
   const v = validateTriage(parsed);
-  return { ok: v.ok, errors: v.errors, warnings: v.warnings, value: v.value, cost_usd: cost, usage: usageShort };
+  return { ok: v.ok, errors: v.errors, warnings: v.warnings, value: v.value, usage };
 }
 
 function fallbackTriage() {

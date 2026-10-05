@@ -37,7 +37,16 @@ for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.json'))) {
       if (!names.has(c.node)) { problems++; console.error(f + ': связь в неизвестную ноду ' + c.node); }
     }
   }
-  if (/sk-ant-[A-Za-z0-9]/.test(raw)) { problems++; console.error(f + ': похоже на ключ API'); }
+  // ключ и адрес шлюза живут только в env сервера: в JSON воркфлоу их быть не должно
+  if (/sk-[A-Za-z0-9_-]{16,}|eyJ[A-Za-z0-9_-]{16,}\.|Bearer [A-Za-z0-9._-]{16,}/.test(raw)) {
+    problems++; console.error(f + ': похоже на ключ API');
+  }
+  for (const n of wf.nodes.filter((x) => x.type === 'n8n-nodes-base.httpRequest')) {
+    const url = String(n.parameters.url || '');
+    if (!url.startsWith('={{') || !url.includes('$env.LLM_BASE_URL') || /https?:\/\//.test(url)) {
+      problems++; console.error(f + ' / ' + n.name + ': адрес LLM должен браться из $env.LLM_BASE_URL');
+    }
+  }
 }
 if (problems) process.exit(1);
 console.log('ok: workflows/*.json');

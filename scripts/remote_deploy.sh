@@ -4,7 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # .env: создаётся из .env.example; в существующий дописываются только новые ключи,
-# пустые секреты генерируются, заданные значения не трогаются и не печатаются
+# пустые секреты генерируются, заданные значения не трогаются и не печатаются.
+# Ключи прежней версии (Anthropic, учёт в долларах) удаляются: пустой ANTHROPIC_API_KEY
+# ничего не ломает, но старый LLM_MODEL=claude-… перекрыл бы модель из ../llm.env
 ( umask 077 && python3 - <<'PY'
 import os, secrets
 gen = {
@@ -12,7 +14,19 @@ gen = {
     "IP_HASH_SALT": lambda: secrets.token_hex(16),
     "EVAL_BYPASS_TOKEN": lambda: secrets.token_hex(24),
 }
+obsolete = {"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "PRICE_INPUT_USD_PER_MTOK",
+            "PRICE_OUTPUT_USD_PER_MTOK", "DAILY_BUDGET_USD"}
 cur = open(".env", encoding="utf-8").read().splitlines() if os.path.exists(".env") else []
+removed = []
+def stale(line):
+    if "=" not in line or line.lstrip().startswith("#"):
+        return False
+    k, v = (x.strip() for x in line.split("=", 1))
+    return k in obsolete or (k == "LLM_MODEL" and v.startswith("claude-"))
+for l in cur:
+    if stale(l):
+        removed.append(l.split("=", 1)[0].strip())
+cur = [l for l in cur if not stale(l)]
 keys = {l.split("=", 1)[0].strip() for l in cur if "=" in l and not l.lstrip().startswith("#")}
 out = list(cur)
 added = []
@@ -34,7 +48,8 @@ for i, l in enumerate(out):
         out[i] = k + "=" + gen[k]()
         added.append(k + " (сгенерирован)")
 open(".env", "w", encoding="utf-8").write("\n".join(out) + "\n")
-print("-- .env: " + ("добавлено " + ", ".join(added) if added else "без изменений"))
+print("-- .env: " + ("добавлено " + ", ".join(added) if added else "новых ключей нет")
+      + ("; удалено устаревших: " + ", ".join(removed) if removed else ""))
 PY
 )
 chmod 600 .env

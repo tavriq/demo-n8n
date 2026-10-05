@@ -15,6 +15,12 @@ const envNum = (name, def) => {
   const n = Number(env(name, String(def)));
   return Number.isFinite(n) && n >= 0 ? n : def;
 };
+// цена не задана или не число -> null: рубли не считаются, учёт только в токенах
+const envPrice = (name) => {
+  const v = env(name, '');
+  const n = Number(v.replace(',', '.'));
+  return v !== '' && Number.isFinite(n) && n >= 0 ? n : null;
+};
 
 const headers = {};
 for (const [k, v] of Object.entries(inJson.headers || {})) headers[String(k).toLowerCase()] = v;
@@ -59,18 +65,20 @@ if (evalToken.length >= 16 && sentToken.length === evalToken.length) {
 }
 
 const masked = maskPII(trimmed.slice(0, MAX_LEN));
-const hasKey = env('ANTHROPIC_API_KEY', '') !== '';
+// LLM: OpenAI-совместимый chat/completions. Ключ и адрес шлюза приходят из env
+// (на сервере — общий файл ../llm.env, см. docker-compose.yml); модель — LLM_MODEL,
+// если пусто — LLM_MODEL_SMART. Нет ключа, адреса или модели -> mock.
+const model = env('LLM_MODEL', env('LLM_MODEL_SMART', ''));
+const hasLlm = env('LLM_API_KEY', '') !== '' && env('LLM_BASE_URL', '') !== '' && model !== '';
 const forceMock = env('TRIAGE_FORCE_MOCK', 'false').toLowerCase() === 'true';
-const mode = hasKey && !forceMock ? 'llm' : 'mock';
-const model = env('LLM_MODEL', 'claude-haiku-4-5-20251001');
+const mode = hasLlm && !forceMock ? 'llm' : 'mock';
 const maxTokens = Math.max(200, Math.min(2000, Math.round(envNum('LLM_MAX_TOKENS', 600))));
-const priceIn = envNum('PRICE_INPUT_USD_PER_MTOK', 1);
-const priceOut = envNum('PRICE_OUTPUT_USD_PER_MTOK', 5);
+const effort = env('LLM_REASONING_EFFORT', '').toLowerCase();
+const reasoningEffort = /^[a-z]{1,16}$/.test(effort) ? effort : null;
 
-// Резерв на худший случай: две попытки, вход ~ системный промпт + текст
-// (консервативно 1 токен на символ), выход = max_tokens.
-const estInput = 900 + masked.text.length;
-const reserveUsd = 2 * (estInput * priceIn + maxTokens * priceOut) / 1e6;
+// Резерв токенов на худший случай: две попытки, вход ~ системный промпт со схемой
+// (по замеру ~550 токенов) + текст (консервативно 1 токен на символ), выход = max_tokens.
+const reserveTokens = 2 * (900 + masked.text.length + maxTokens);
 
 const ctx = {
   source: isEval ? 'eval' : (fromForm ? 'form' : 'api'),
@@ -85,13 +93,16 @@ const ctx = {
   mode,
   model,
   max_tokens: maxTokens,
-  price_in: priceIn,
-  price_out: priceOut,
-  reserve_usd: Math.round(reserveUsd * 1e6) / 1e6,
-  daily_budget_usd: envNum('DAILY_BUDGET_USD', 0.5),
+  reasoning_effort: reasoningEffort,
+  reserve_tokens: reserveTokens,
+  daily_token_budget: Math.round(envNum('DAILY_TOKEN_BUDGET', 200000)),
+  price_rub_in: envPrice('PRICE_RUB_PER_1M_INPUT'),
+  price_rub_out: envPrice('PRICE_RUB_PER_1M_OUTPUT'),
   limit_ip_hour: envNum('RATE_LIMIT_PER_IP_HOUR', 5),
   limit_global_hour: envNum('RATE_LIMIT_GLOBAL_HOUR', 60),
   trust_proxy_header: trust,
 };
-if (mode === 'llm' && !inputError) ctx.llm_body = buildLlmBody(ctx.text_masked, model, maxTokens, null);
+if (mode === 'llm' && !inputError) {
+  ctx.llm_body = buildLlmBody(ctx.text_masked, model, maxTokens, null, reasoningEffort);
+}
 return [{ json: ctx }];

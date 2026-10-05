@@ -9,7 +9,13 @@ services:
     ports:
       - "127.0.0.1:18102:5678"
     mem_limit: 600m
-    env_file: .env
+    env_file:
+      # ключ и адрес LLM-шлюза: общий файл демо на сервере (/opt/demos/llm.env, права 600,
+      # не в git): LLM_API_KEY, LLM_BASE_URL, LLM_MODEL_SMART, LLM_MODEL_FAST.
+      # Нет файла — работает mock. Значения из .env ниже перекрывают его.
+      - path: ../llm.env
+        required: false
+      - path: .env
     environment:
       N8N_PORT: "5678"
       N8N_DIAGNOSTICS_ENABLED: "false"

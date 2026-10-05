@@ -13,9 +13,11 @@ const ipHour = lastHour.filter((r) => r.client_key === ctx.client_key).length;
 // общий лимит считается отдельно для формы и для API: скрипт, выбравший лимит API,
 // не закрывает форму для посетителей. Деньги при этом защищает дневной бюджет.
 const sourceHour = lastHour.filter((r) => r.source === ctx.source).length;
-const spentToday = rows
+// дневной лимит считается в токенах (вход + выход, все попытки): цены провайдера
+// в настройках не обязательны, а токены приходят в usage каждого ответа
+const tokensToday = rows
   .filter((r) => r.day === ctx.day)
-  .reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
+  .reduce((s, r) => s + (Number(r.tokens_in) || 0) + (Number(r.tokens_out) || 0), 0);
 
 let decision = 'allow';
 let httpStatus = 200;
@@ -28,7 +30,7 @@ if (ctx.input_error) {
 } else if (!ctx.bypass_hourly && sourceHour >= ctx.limit_global_hour) {
   decision = 'rate_limited_global';
   httpStatus = 429;
-} else if (ctx.mode === 'llm' && spentToday + ctx.reserve_usd > ctx.daily_budget_usd) {
+} else if (ctx.mode === 'llm' && tokensToday + ctx.reserve_tokens > ctx.daily_token_budget) {
   decision = 'daily_budget';
   httpStatus = 429;
 }
@@ -39,7 +41,7 @@ return [{
     decision,
     allowed: decision === 'allow',
     http_status: httpStatus,
-    spent_today_usd: Math.round(spentToday * 1e6) / 1e6,
+    tokens_today: tokensToday,
     ip_requests_last_hour: ipHour,
     requests_last_hour: lastHour.length,
     source_requests_last_hour: sourceHour,
