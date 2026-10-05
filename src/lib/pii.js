@@ -138,9 +138,10 @@ function maskPII(input) {
 
   // @ник
   text = text.replace(/(?<![\w@.])@[A-Za-z][A-Za-z0-9_]{4,31}(?!\w)/g, () => put('handle'));
-  // ник после слова-маркера: «tg: ivan_petrov», «телеграм ivan_petrov», «инста ivan.petrov»
+  // ник после слова-маркера: «tg: ivan_petrov», «телеграм ivan_petrov», «инста ivan.petrov».
+  // Маркер — отдельное слово: иначе «installation» и «инструмент Makita» теряли бы слово
   text = text.replace(
-    /(?<![\p{L}\p{N}_])(tg|тг|телег\p{L}*|telegram|инст\p{L}*|insta\p{L}*|skype|скайп\p{L}*|ник)(\s*[:\-—]?\s*)([A-Za-z][A-Za-z0-9_.]{3,31})(?![A-Za-z0-9_])/giu,
+    /(?<![\p{L}\p{N}_])(tg|тг|телег\p{L}*|telegram|инст(?:а|у|ой|е|аграм\p{L}*)|insta(?:gram)?|skype|скайп\p{L}*|ник)(?![\p{L}\p{N}_])(\s*[:\-—]?\s*)([A-Za-z][A-Za-z0-9_.]{3,31})(?![A-Za-z0-9_])/giu,
     (m, w, sp) => w + sp + put('handle')
   );
 

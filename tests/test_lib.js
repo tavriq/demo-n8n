@@ -35,6 +35,14 @@ t('email и ник', () => {
   assert.equal(r.text, 'пишите [email скрыт] или [ник скрыт]');
   assert.equal(r.total, 2);
 });
+t('ник после слова-маркера; маркер только отдельным словом', () => {
+  for (const s of ['тг ivan_petrov', 'tg: ivan_petrov', 'инста ivan.petrov', 'инстаграм ivan_petrov', 'insta: ivan_petrov', 'Instagram ivan_petrov']) {
+    assert.equal(maskPII(s).text.endsWith('[ник скрыт]'), true, s);
+  }
+  for (const s of ['{"category":"installation"}', 'инструмент Makita', 'инструкция Bosch', 'instant Kärcher', 'никогда Stihl']) {
+    assert.equal(maskPII(s).text, s, s);
+  }
+});
 t('номер карты', () => {
   assert.equal(maskPII('карта 4276 1234 5678 9012').text, 'карта [номер карты скрыт]');
 });
