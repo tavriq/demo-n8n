@@ -1,0 +1,11 @@
+# секреты и локальные настройки
+.env
+.env.*
+!.env.example
+
+# служебное
+.DS_Store
+node_modules/
+__pycache__/
+*.pyc
+tmp/

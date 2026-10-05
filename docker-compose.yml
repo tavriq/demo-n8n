@@ -1,0 +1,54 @@
+name: demo-n8n
+
+services:
+  n8n:
+    # версия закреплена; обновление = смена тега + прогон smoke
+    image: n8nio/n8n:2.41.6
+    restart: unless-stopped
+    # наружу ничего: только loopback сервера, доступ владельца через ssh-туннель
+    ports:
+      - "127.0.0.1:18102:5678"
+    mem_limit: 600m
+    env_file: .env
+    environment:
+      N8N_PORT: "5678"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+      N8N_TEMPLATES_ENABLED: "false"
+      N8N_HIRING_BANNER_ENABLED: "false"
+      N8N_PUBLIC_API_DISABLED: "true"
+      DB_TYPE: sqlite
+      GENERIC_TIMEZONE: Europe/Moscow
+      TZ: Europe/Moscow
+      # одно продакшн-исполнение за раз: проверка лимитов и запись в журнал
+      # не перемешиваются между параллельными заявками (см. docs/design.md)
+      N8N_CONCURRENCY_PRODUCTION_LIMIT: "1"
+      # Code-ноды читают лимиты и наличие ключа из env; воркфлоу правит только владелец
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      N8N_PAYLOAD_SIZE_MAX: "1"
+      # история исполнений: успешные не сохраняются, ошибки живут 72 часа;
+      # удалённые записи стираются из sqlite физически каждые 5 минут
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "72"
+      EXECUTIONS_DATA_PRUNE_MAX_COUNT: "1000"
+      EXECUTIONS_DATA_HARD_DELETE_BUFFER: "0"
+      EXECUTIONS_DATA_PRUNE_HARD_DELETE_INTERVAL: "5"
+      NODE_OPTIONS: --max-old-space-size=384
+      N8N_RUNNERS_MAX_OLD_SPACE_SIZE: "128"
+      N8N_RUNNERS_TASK_TIMEOUT: "60"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/workflows:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+volumes:
+  n8n_data:
