@@ -1,11 +1,24 @@
 {
-  "date_utc": "2026-10-05 08:24",
-  "n8n_mode_at_start": "mock",
+  "date_utc": "2026-10-05 08:54",
+  "n8n_mode_at_start": "llm",
   "memory_n8n": {
-    "before": "379.2MiB / 600MiB",
-    "after": "482.1MiB / 600MiB"
+    "before": "398MiB / 600MiB",
+    "after": "473.5MiB / 600MiB"
   },
   "results": [
+    {
+      "name": "secrets_at_rest",
+      "ok": true,
+      "checks": {
+        "LLM_API_KEY: нет в sqlite n8n": true,
+        "LLM_API_KEY: нет в логах контейнера": true,
+        "LLM_API_KEY: нет в файлах проекта (кроме .env)": true,
+        "LLM_BASE_URL: нет в sqlite n8n": true,
+        "LLM_BASE_URL: нет в логах контейнера": true,
+        "LLM_BASE_URL: нет в файлах проекта (кроме .env)": true
+      },
+      "files_scanned": 43
+    },
     {
       "name": "xss_board",
       "ok": true,
@@ -47,6 +60,8 @@
         "429 rate_limited_ip не позже заявки №6, хотя у каждой свой X-Real-IP": true
       },
       "statuses": [
+        200,
+        200,
         200,
         200,
         200,
@@ -93,39 +108,27 @@
       "result_page_excerpt": "Категория: Уборка\nСрочность: обычная\nГород: Казань\nБюджет: не указан\nСуть: Уборка: &lt;b&gt;жирный&lt;/b&gt; &amp; \"кавычки\" — проверка формы: нужна уборка склада в Казани, звоните [телефон скрыт]\nСледующий шаг: Уточнить площадь и тип помещения, рассчитать стоимость уборки.\nНужен человек: нет\nРежим: mock (заглушка без LLM)\nКонтакты в тексте замаскированы: 1\n\nЗаявка появится на публичной доске."
     },
     {
-      "name": "phase2_env_restored",
-      "ok": true,
-      "restored": [
-        {
-          "env_keys_changed": [
-            "TRUST_PROXY_HEADER"
-          ],
-          "env_identical": true,
-          "board_mode": "mock"
-        }
-      ]
-    },
-    {
       "name": "llm_branch_and_budget",
-      "spent_before_usd": 0.0013,
-      "temporary_budget_usd": 0.014674,
-      "reserve_usd": 0.008226,
+      "tokens_before": 29872,
+      "temporary_token_budget": 36926,
+      "reserve_tokens": 3426,
       "ok": true,
       "checks": {
-        "HTTP 500 дважды → 200, mode=llm_fallback, needs_human, category=other, $0": true,
+        "HTTP 500 дважды → 200, mode=llm_fallback, needs_human, category=other, 0 токенов": true,
         "контакт в ответе модели скрыт (summary, next_step)": true,
         "контакт в ответе модели → needs_human=true": true,
         "контакты входа и выхода посчитаны (pii_masked > 2)": true,
-        "расход посчитан по usage": true,
-        "битый JSON один раз → повтор, mode=llm, attempts=2": true,
+        "токены посчитаны по usage (prompt_tokens, completion_tokens)": true,
+        "битый JSON один раз → повтор, mode=llm, attempts=2, токены обеих попыток": true,
         "битый JSON дважды → mode=llm_fallback, needs_human, category=other": true,
-        "бюджет: следующая заявка 429 daily_budget (токен прогонов бюджет не снимает)": true,
-        "отказ вежливый, с суммами": true,
+        "лимит токенов: следующая заявка 429 daily_budget (токен прогонов лимит не снимает)": true,
+        "отказ вежливый, с числами": true,
         "в API ушло 7 запросов (2+1+2+2, отказ по бюджету — до вызова)": true,
         "3 повторных запроса (после 500, битого JSON, снова битого) содержат список ошибок": true,
         "в запросах к API нет телефона и email": true,
-        "запросы со схемой json_schema и заголовками ключа и версии": true,
-        "доска показывает временный бюджет": true,
+        "запросы в /chat/completions, схема json_schema strict, ключ в Authorization: Bearer": true,
+        "в заглушку пришёл тестовый ключ, а не настоящий": true,
+        "доска показывает временный лимит токенов": true,
         "тестового ключа нет в sqlite n8n": true,
         "тестового ключа нет в логах контейнера": true
       },
@@ -150,94 +153,124 @@
         "invalid_always": 2,
         "budget": null
       },
-      "cost_usd": {
-        "http500": 0,
-        "pii_output": 0.001287,
-        "invalid_once": 0.002574,
-        "invalid_always": 0.002574,
-        "budget": null
+      "tokens": {
+        "http500": [
+          0,
+          0
+        ],
+        "pii_output": [
+          812,
+          95
+        ],
+        "invalid_once": [
+          1624,
+          190
+        ],
+        "invalid_always": [
+          1624,
+          190
+        ],
+        "budget": [
+          null,
+          null
+        ]
       },
       "pii_output_result": {
         "summary": "Сломался компрессор, клиент просит перезвонить на [телефон скрыт]",
         "next_step": "Позвонить клиенту по [телефон скрыт] или написать на [email скрыт].",
         "pii_masked": 5
       },
-      "refusal_message": "Дневной бюджет демо на LLM исчерпан: потрачено $0.0077 из $0.0147. Попробуйте завтра.",
-      "board_spent_after_usd": 0.0077,
+      "refusal_message": "Дневной лимит токенов демо на LLM исчерпан: израсходовано 34 407 из 36 926. Попробуйте завтра.",
+      "board_tokens_after": 34407,
       "fake_api_log": [
         {
-          "path": "/v1/messages",
-          "model": "claude-haiku-4-5-20251001",
-          "max_tokens": 600,
+          "path": "/v1/chat/completions",
+          "model": "fake-model",
+          "max_completion_tokens": 600,
           "headerOk": true,
           "schemaOk": true,
+          "keySha": "2c0ab1ce84bb",
           "retry": false,
           "piiLike": false
         },
         {
-          "path": "/v1/messages",
-          "model": "claude-haiku-4-5-20251001",
-          "max_tokens": 600,
+          "path": "/v1/chat/completions",
+          "model": "fake-model",
+          "max_completion_tokens": 600,
           "headerOk": true,
           "schemaOk": true,
+          "keySha": "2c0ab1ce84bb",
           "retry": true,
           "piiLike": false
         },
         {
-          "path": "/v1/messages",
-          "model": "claude-haiku-4-5-20251001",
-          "max_tokens": 600,
+          "path": "/v1/chat/completions",
+          "model": "fake-model",
+          "max_completion_tokens": 600,
           "headerOk": true,
           "schemaOk": true,
+          "keySha": "2c0ab1ce84bb",
           "retry": false,
           "piiLike": false
         },
         {
-          "path": "/v1/messages",
-          "model": "claude-haiku-4-5-20251001",
-          "max_tokens": 600,
+          "path": "/v1/chat/completions",
+          "model": "fake-model",
+          "max_completion_tokens": 600,
           "headerOk": true,
           "schemaOk": true,
+          "keySha": "2c0ab1ce84bb",
           "retry": false,
           "piiLike": false
         },
         {
-          "path": "/v1/messages",
-          "model": "claude-haiku-4-5-20251001",
-          "max_tokens": 600,
+          "path": "/v1/chat/completions",
+          "model": "fake-model",
+          "max_completion_tokens": 600,
           "headerOk": true,
           "schemaOk": true,
+          "keySha": "2c0ab1ce84bb",
           "retry": true,
           "piiLike": false
         },
         {
-          "path": "/v1/messages",
-          "model": "claude-haiku-4-5-20251001",
-          "max_tokens": 600,
+          "path": "/v1/chat/completions",
+          "model": "fake-model",
+          "max_completion_tokens": 600,
           "headerOk": true,
           "schemaOk": true,
+          "keySha": "2c0ab1ce84bb",
           "retry": false,
           "piiLike": false
         },
         {
-          "path": "/v1/messages",
-          "model": "claude-haiku-4-5-20251001",
-          "max_tokens": 600,
+          "path": "/v1/chat/completions",
+          "model": "fake-model",
+          "max_completion_tokens": 600,
           "headerOk": true,
           "schemaOk": true,
+          "keySha": "2c0ab1ce84bb",
           "retry": true,
           "piiLike": false
         }
-      ],
+      ]
+    },
+    {
+      "name": "env_restored",
+      "ok": true,
       "restored": [
         {
           "env_keys_changed": [
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_BASE_URL",
-            "DAILY_BUDGET_USD"
+            "DAILY_TOKEN_BUDGET",
+            "LLM_API_KEY",
+            "LLM_BASE_URL",
+            "LLM_MODEL",
+            "LLM_REASONING_EFFORT",
+            "TRIAGE_FORCE_MOCK",
+            "TRUST_PROXY_HEADER"
           ],
           "env_identical": true,
-          "board_mode": "mock"
+          "board_mode": "llm"
         }
       ]
     }
