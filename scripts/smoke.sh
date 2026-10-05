@@ -8,7 +8,9 @@ TOKEN=$(grep -E '^EVAL_BYPASS_TOKEN=' .env | cut -d= -f2- || true)
 
 body=""
 for i in $(seq 1 20); do
-  body=$(curl -s -m 60 -X POST "$BASE/webhook/triage" -H 'Content-Type: application/json' -H "X-Eval-Token: $TOKEN" \
+  # токен идёт заголовком из stdin, а не аргументом curl: в аргументах его видно в ps
+  body=$(printf 'X-Eval-Token: %s\n' "$TOKEN" | curl -s -m 60 -X POST "$BASE/webhook/triage" \
+    -H 'Content-Type: application/json' -H @- \
     -d '{"text":"Сломался генератор на складе в Казани, нужен мастер сегодня. Бюджет до 15 тыс руб. Тел +7 999 123-45-67"}' || true)
   # сразу после старта вебхук может быть ещё не зарегистрирован (404) — ждём ответа контура
   if [ -n "$body" ] && printf '%s' "$body" | python3 -c 'import json,sys; sys.exit(0 if "ok" in json.load(sys.stdin) else 1)' 2>/dev/null; then break; fi
