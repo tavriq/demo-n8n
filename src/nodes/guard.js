@@ -6,7 +6,9 @@ const ctx = $('Подготовка').first().json;
 const rows = $input.all().map((i) => i.json).filter((r) => r && r.ts !== undefined && r.ts !== null);
 
 const hourAgo = ctx.now_ms - 3600 * 1000;
-const lastHour = rows.filter((r) => Number(r.ts) >= hourAgo);
+// служебные прогоны (evals, smoke) не съедают лимиты в час живых пользователей,
+// но их расход входит в дневной бюджет
+const lastHour = rows.filter((r) => Number(r.ts) >= hourAgo && r.source !== 'eval');
 const ipHour = lastHour.filter((r) => r.client_key === ctx.client_key).length;
 const spentToday = rows
   .filter((r) => r.day === ctx.day)
