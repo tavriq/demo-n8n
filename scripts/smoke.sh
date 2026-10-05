@@ -30,6 +30,6 @@ assert "999" not in d["meta"]["text_masked"], "телефон не замаск�
 print("smoke triage: ok, mode=%s category=%s urgency=%s city=%s budget=%s" % (d["mode"], r["category"], r["urgency"], r["city"], r["budget_rub"]))
 '
 code=$(curl -s -o /tmp/demo-n8n-board.html -w '%{http_code}' "$BASE/webhook/board")
-grep -q 'Потрачено сегодня' /tmp/demo-n8n-board.html
+grep -q 'Токенов сегодня' /tmp/demo-n8n-board.html
 echo "smoke board: HTTP $code, $(wc -c < /tmp/demo-n8n-board.html) байт"
 rm -f /tmp/demo-n8n-board.html
