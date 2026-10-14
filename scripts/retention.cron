@@ -1,0 +1,2 @@
+# Демо n8n: заявки посетителей старше 30 суток — удалить (tavriq.ru/privacy/), 14.10.2026
+30 3 * * * root /usr/bin/python3 /usr/local/bin/demo-n8n-retention.py >> /var/log/demo-n8n-retention.log 2>&1

@@ -396,6 +396,17 @@ ssh -L 18102:127.0.0.1:18102 vps
 и через `$env` увидит секреты из окружения, включая ключ API. Создать его через туннель
 до того, как что-то публиковать.
 
+### Срок хранения
+
+Заявки посетителей (источник `form` и `api`) старше 30 суток удаляет `scripts/retention.py`
+раз в сутки; строки набора проверки (`eval`) остаются. `deploy.sh` его не ставит, на сервер
+он кладётся один раз руками:
+
+```bash
+scp scripts/retention.py vps:/usr/local/bin/demo-n8n-retention.py
+scp scripts/retention.cron vps:/etc/cron.d/demo-n8n-retention
+```
+
 ### Публичный адрес
 
 Наружу публикуются только эти пути, остальное (редактор, `/rest/`) — нет:
@@ -500,6 +511,7 @@ sandbox/                    песочница на корне демо: index.h
 scripts/build_sandbox.js    sandbox/data.json: промпт и схема из src/lib, записи пресетов, эталон из evals/
 scripts/record_presets.py   записывает прогоны пресетов через вебхук -> sandbox/recordings.json
 scripts/deploy.sh           деплой (remote_deploy.sh, wait_published.py, smoke.sh — на сервере)
+scripts/retention.py        удаление заявок посетителей старше 30 суток; retention.cron — запуск раз в сутки
 tests/                      тесты функций и собранных нод, проверка JSON, заглушка OpenAI-совместимого API
 evals/cases.jsonl           42 кейса с разметкой
 evals/run.py                прогон через вебхук -> results-<дата>-<режим>[-<модель>].json и .md, latest.md
