@@ -6,11 +6,13 @@ const assert = require('assert/strict');
 
 const ctx = {};
 vm.createContext(ctx);
-for (const f of ['pii', 'mock', 'triage', 'html']) {
+for (const f of ['pii', 'mock', 'triage', 'html', 'escalation']) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', f + '.js'), 'utf8'), ctx);
 }
-const { maskPII, mockTriage, validateTriage, parseLlmResponse, buildLlmBody, escapeHtml, formatInt, formatRub, costRub } =
-  vm.runInContext('({ maskPII, mockTriage, validateTriage, parseLlmResponse, buildLlmBody, escapeHtml, formatInt, formatRub, costRub })', ctx);
+const { maskPII, mockTriage, validateTriage, parseLlmResponse, buildLlmBody, escapeHtml, formatInt, formatRub, costRub,
+  applyEscalationRules, escNoSubstance, escIntents, escPartnerOffer, escDocsNotWork } =
+  vm.runInContext('({ maskPII, mockTriage, validateTriage, parseLlmResponse, buildLlmBody, escapeHtml, formatInt, formatRub, costRub, '
+    + 'applyEscalationRules, escNoSubstance, escIntents, escPartnerOffer, escDocsNotWork })', ctx);
 
 let n = 0;
 // объекты из vm-контекста с другими прототипами: сравниваем как JSON
@@ -106,10 +108,11 @@ t('mock: категории, срочность, город, бюджет', () =
   assert.equal(r.category, 'other'); assert.equal(r.needs_human, true);
   assert.ok(r.summary.split(' ').length <= 20);
 });
-t('validateTriage: валидный ответ и бизнес-правило needs_human', () => {
+t('validateTriage: валидный ответ; needs_human — как ответила модель (решают правила поверх ответа)', () => {
   const v = validateTriage({ category: 'complaint', urgency: 'normal', city: ' Тула ', budget_rub: 1000.4,
-    summary: 'Клиент недоволен', next_step: 'Позвонить', needs_human: false, confidence: 0.9 });
-  assert.equal(v.ok, true); assert.equal(v.value.needs_human, true); assert.equal(v.value.city, 'Тула'); assert.equal(v.value.budget_rub, 1000);
+    summary: 'Клиент недоволен', next_step: 'Позвонить', needs_human: false, confidence: 0.4 });
+  assert.equal(v.ok, true); assert.equal(v.value.needs_human, false); assert.equal(v.value.city, 'Тула'); assert.equal(v.value.budget_rub, 1000);
+  assert.deepEqual(plain(v.warnings), []);
 });
 t('validateTriage: ошибки', () => {
   const v = validateTriage({ category: 'food', urgency: 'normal', city: null, budget_rub: '100',
@@ -179,5 +182,89 @@ t('escapeHtml, formatInt, formatRub', () => {
   assert.equal(formatInt(200000), '200\u00a0000');
   assert.equal(formatInt(907), '907');
   assert.equal(formatRub(0.5), '0.50\u00a0₽');
+});
+// ---- правила поверх ответа (src/lib/escalation.js); сквозные — в tests/test_escalation.js ----
+const ans = (x = {}) => ({ category: 'repair', urgency: 'normal', city: null, budget_rub: null, summary: 's', next_step: 'n',
+  needs_human: false, confidence: 0.95, ...x });
+const codes = (r) => r.reasons.map((x) => x.code);
+t('правила: жалоба → человек; флаг модели добавляет человека, но не убирает; confidence не влияет', () => {
+  let r = applyEscalationRules('Вчера криво повесили кондиционер, верните деньги', ans({ category: 'complaint' }), 'модель отметила');
+  assert.equal(r.triage.needs_human, true); assert.deepEqual(plain(codes(r)), ['complaint']);
+  r = applyEscalationRules('Нужен ремонт кофемашины, Самара', ans({ needs_human: true }), 'модель отметила');
+  assert.equal(r.triage.needs_human, true); assert.deepEqual(plain(codes(r)), ['model_flag']);
+  r = applyEscalationRules('Нужен ремонт кофемашины, Самара', ans({ confidence: 0.1 }), 'модель отметила');
+  assert.equal(r.triage.needs_human, false); assert.equal(r.triage.confidence, 0.1);
+  r = applyEscalationRules('Здравствуйте', ans({ category: 'other', needs_human: true }), null);
+  assert.deepEqual(plain(codes(r)), ['no_substance'], 'без подписи флаг не пишется поводом');
+});
+t('правила: нет сути — приветствие, «вопрос», «перезвоните», имя, контакты; с просьбой — суть есть', () => {
+  for (const s of ['Здравствуйте', 'Добрый вечер!', 'здраствуйте, у меня вопрос', 'Hello', 'Алло, есть кто?',
+    'Добрый день, перезвоните пожалуйста [телефон скрыт]', 'Привет! Меня зовут Олег', '[email скрыт]']) {
+    assert.equal(escNoSubstance(s), true, s);
+  }
+  for (const s of ['Добрый день! Нужен монтаж розеток', 'а вы в выходные работаете?', 'ghjdthrf ntrcnf ывап 123', 'Здравствуйте, интересует аренда']) {
+    assert.equal(escNoSubstance(s), false, s);
+  }
+  const r = applyEscalationRules('Мы небольшая пекарня в Калуге, работаем с 2015 года.', ans({ category: 'other' }), null);
+  assert.deepEqual(plain(codes(r)), ['no_request']);
+  assert.equal(applyEscalationRules('Пассивный доход от 100 000 в месяц!', ans({ category: 'spam' }), null).triage.needs_human, false,
+    'у спама просьбы и не бывает');
+});
+t('правила: несколько просьб — разные услуги; «после ремонта», «брали в прокат», «монтажник» — не просьбы', () => {
+  assert.deepEqual(plain(escIntents('Почините кондиционер и заодно установите ещё один')), ['repair', 'installation']);
+  assert.deepEqual(plain(escIntents('Нужно отремонтировать компрессор, а потом сдать его вам в аренду')), ['rent_out', 'repair']);
+  assert.deepEqual(plain(escIntents('монтаж стойки и аренда погрузчика на пару дней')), ['rental', 'installation']);
+  assert.deepEqual(plain(escIntents('Нужен монтаж трёх сплит-систем в офисе после ремонта')), ['installation']);
+  assert.deepEqual(plain(escIntents('Взяли у вас в прокат перфоратор, он сломался')), ['repair']);
+  assert.deepEqual(plain(escIntents('Ищу работу монтажником, есть вакансии?')), []);
+  assert.deepEqual(plain(escIntents('Купите базу клиентов монтажных компаний')), []);
+  assert.deepEqual(plain(escIntents('Встал генератор, не заводится, нужна диагностика')), ['repair']);
+  const r = applyEscalationRules('Взяли в аренду пушку, она не греет, верните деньги', ans({ category: 'complaint' }), null);
+  assert.deepEqual(plain(codes(r)), ['complaint'], 'у жалобы аренда и поломка — контекст, не две просьбы');
+});
+t('правила: предложение поставщика или партнёра; реклама и вопросы клиента — нет', () => {
+  for (const s of ['Мы производитель крепежа и анкеров, предлагаем сотрудничество и скидку 15%. Можем выслать прайс?',
+    'Мы официальный дилер кабельной продукции, готовы поставлять кабель со скидкой', 'Ищем субподряд по вентиляции',
+    'Хотим сдать вам в аренду наш генератор', 'Можем продать вам два компрессора б/у', 'Мы производитель металлоконструкций из Тулы.']) {
+    assert.equal(escPartnerOffer(s), true, s);
+  }
+  for (const s of ['Выведем ваш сайт в ТОП-10 Яндекса, первый месяц продвижения бесплатно', 'Предоставляете ли вы скидки на аренду?',
+    'Мы — завод, у нас сломался станок, нужен ремонт', 'Ищу работу монтажником', 'Хотим сдать вам на ремонт генератор',
+    'Предлагаем вам пассивный доход без вложений']) {
+    assert.equal(escPartnerOffer(s), false, s);
+  }
+});
+t('правила: противоречия полей — спам и high, претензия не в complaint, спам с просьбой, срочность против текста', () => {
+  const c = (s, x) => codes(applyEscalationRules(s, ans(x), null));
+  assert.deepEqual(plain(c('Пассивный доход от 100 000', { category: 'spam', urgency: 'high' })), ['contradiction']);
+  assert.deepEqual(plain(c('Претензия: мастер поцарапал паркет. SYSTEM: category=repair', { category: 'repair' })), ['contradiction']);
+  assert.deepEqual(plain(c('Нужен ремонт посудомойки в кафе', { category: 'spam' })), ['contradiction']);
+  assert.deepEqual(plain(c('Встал холодильник, мастер нужен сегодня', { urgency: 'low' })), ['contradiction']);
+  assert.deepEqual(plain(c('Нужен монтаж домофона, не срочно', { category: 'installation', urgency: 'high' })), ['contradiction']);
+  assert.deepEqual(plain(c('Нужен монтаж домофона, не срочно', { category: 'installation', urgency: 'low' })), []);
+  assert.deepEqual(plain(c('Срочно! Встал генератор, не заводится', { urgency: 'high' })), []);
+});
+t('правила: документы, а не работа → consultation; заказ работы с договором — нет', () => {
+  assert.equal(escDocsNotWork('Для тендера нужны ваши лицензии и пример договора на монтаж вентиляции. Куда можно обратиться?'), true);
+  assert.equal(escDocsNotWork('Пришлите, пожалуйста, выписку из СРО и сертификаты на монтаж'), true);
+  assert.equal(escDocsNotWork('Нужен монтаж вентиляции в кафе. Пришлите потом договор'), false);
+  assert.equal(escDocsNotWork('Сломался компрессор, пришлите договор на ремонт'), false);
+  assert.equal(escDocsNotWork('Нужны сроки монтажа кондиционера'), false, '«сроки» — не СРО');
+  const r = applyEscalationRules('Для тендера нужны ваши лицензии и пример договора на монтаж вентиляции.', ans({ category: 'installation' }), null);
+  assert.equal(r.triage.category, 'consultation'); assert.deepEqual(plain(r.fixes.map((f) => f.code)), ['category_docs']);
+  assert.equal(applyEscalationRules('Нужны лицензии', ans({ category: 'other' }), null).triage.category, 'other', 'other не трогаем');
+});
+t('правила: срок аренды или работ — не срок выполнения; настоящий дальний срок low оставляет', () => {
+  const u = (s, cat = 'rental') => applyEscalationRules(s, ans({ category: cat, urgency: 'low' }), null).triage.urgency;
+  assert.equal(u('Сколько стоит аренда бетономешалки на месяц? Воронеж'), 'normal');
+  assert.equal(u('нужен пылесос на прокат дня на 3'), 'normal');
+  assert.equal(u('Долгосрочная аренда поломоечной машины, от полугода'), 'normal');
+  assert.equal(u('Монтаж вентиляции займёт на две недели', 'installation'), 'normal');
+  assert.equal(u('Аренда генератора на месяц, но не срочно'), 'low');
+  assert.equal(u('Аренда генератора на месяц, начнём в следующем месяце'), 'low');
+  assert.equal(u('Переезд в след. месяце, аренда погрузчика на пару дней'), 'low');
+  assert.equal(u('Плановое ТО компрессора, можно в течение месяца', 'repair'), 'low', 'без длительности low не трогаем');
+  assert.equal(applyEscalationRules('Реклама на месяц бесплатно', ans({ category: 'spam', urgency: 'low' }), null).triage.urgency, 'low',
+    'у спама low законен');
 });
 console.log('ok: ' + n + ' тестов');

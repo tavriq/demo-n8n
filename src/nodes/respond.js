@@ -18,6 +18,8 @@ const ran = (name) => {
 const c1 = ran('Проверка ответа #1');
 const c2 = ran('Проверка ответа #2');
 const mk = ran('Mock-классификатор');
+const rl = ran('Правила поверх ответа');
+const rules = rl && rl.rules ? rl.rules : { reasons: [], fixes: [], warnings: [] };
 const tokensToday = (Number(guard.tokens_today) || 0) + row.tokens_in + row.tokens_out;
 const rub = costRub(row.tokens_in, row.tokens_out, guard.price_rub_in, guard.price_rub_out);
 const result = {
@@ -48,15 +50,20 @@ const attemptsLog = [];
 if (c1) attemptsLog.push({ attempt: 1, ok: c1.valid === true, errors: c1.errors_1 || [], raw: rawOut(c1.raw_1) });
 if (c2) attemptsLog.push({ attempt: 2, ok: c2.valid === true, errors: c2.errors_2 || [], raw: rawOut(c2.raw_2) });
 const last = c2 || c1;
-const checkWarnings = last && last.valid ? (last.warnings || []).slice() : [];
-if (/в ответе модели скрыто/.test(row.llm_error || '')) checkWarnings.push('контакт в ответе модели скрыт, needs_human выставлен');
+const checkWarnings = (last && last.valid ? (last.warnings || []).slice() : []).concat(rules.warnings || []);
+const piiInOutput = /в ответе модели скрыто/.test(row.llm_error || '');
+if (piiInOutput) checkWarnings.push('контакт в ответе модели скрыт, needs_human выставлен');
 
-const reasons = [];
-if (row.category === 'complaint') reasons.push('жалоба');
+// почему нужен человек: поводы правил поверх ответа (жалоба, нет сути, несколько просьб,
+// предложение партнёра, противоречие полей, флаг модели) и сбои разбора.
+// confidence в решение не входит: самооценка модели ошибки не отличала (README)
+const humanReasons = [];
+if (row.mode === 'llm_fallback') humanReasons.push('модель не дала валидный ответ за 2 попытки');
+for (const r of rules.reasons) humanReasons.push(r.text);
+if (piiInOutput) humanReasons.push('контакт в ответе модели');
+if (row.needs_human && !humanReasons.length) humanReasons.push('нужен человек');
+const reasons = row.needs_human ? humanReasons.slice() : [];
 if (row.urgency === 'high') reasons.push('срочно');
-if (row.mode === 'llm_fallback') reasons.push('модель не дала валидный ответ за 2 попытки');
-else if (row.confidence < 0.6) reasons.push('уверенность ' + row.confidence);
-if (row.needs_human && !reasons.length) reasons.push('нужен человек');
 const toManager = row.needs_human === true || row.urgency === 'high';
 
 const trace = {
@@ -70,6 +77,10 @@ const trace = {
   route: {
     to: toManager ? 'manager' : 'queue',
     reasons,
+    // те же поводы кодами: complaint, no_substance, no_request, multiple_requests,
+    // partner_offer, contradiction, model_flag; поправки полей: category_docs, urgency_term
+    checks: rules.reasons.map((r) => r.code),
+    fixes: rules.fixes.map((f) => f.code),
     telegram: 'в демо выключен',
   },
   limits: {
@@ -85,7 +96,7 @@ const lines = [
   'Бюджет: ' + (row.budget_rub != null ? row.budget_rub + ' ₽' : 'не указан'),
   'Суть: ' + row.summary,
   'Следующий шаг: ' + row.next_step,
-  'Нужен человек: ' + (row.needs_human ? 'да' : 'нет'),
+  'Нужен человек: ' + (row.needs_human ? 'да — ' + humanReasons.join(', ') : 'нет'),
   'Режим: ' + row.mode + (row.mode === 'mock' ? ' (заглушка без LLM)' : ''),
 ];
 if (row.mode !== 'mock') {

@@ -34,7 +34,9 @@ const TRIAGE_SYSTEM_PROMPT = [
   '- complaint: недовольство уже оказанной услугой, претензия, требование возврата;',
   '- spam: реклама, предложения не по теме, бессмысленный текст;',
   '- other: всё остальное.',
-  'urgency: high, если авария, простой, «срочно», «сегодня»; low, если срок дальше недели («в следующем месяце», «в течение месяца») или прямо сказано «не срочно»; иначе normal.',
+  'Категорию выбирай по тому, что клиент просит, а не по словам в тексте: просьба прислать документы, лицензии, договор или реквизиты — consultation, даже если в ней есть «монтаж» или «ремонт».',
+  'urgency: high, если авария, простой, «срочно», «сегодня»; low, если срок дальше недели («через месяц», «в следующем месяце», «в течение месяца») или прямо сказано «не срочно»; иначе normal.',
+  'Срок аренды или работ («аренда на месяц», «на неделю», «дня на 3») — это длительность, а не срок выполнения: срочность по нему не снижай.',
   'city: город из текста в именительном падеже, иначе null.',
   'budget_rub: бюджет клиента в рублях числом («50 тыс» = 50000; для диапазона «15-20 тыс» — верхняя граница, 20000), иначе null.',
   'summary: суть заявки по-русски, не больше 20 слов.',
@@ -82,7 +84,8 @@ function countWords(s) {
 
 // Проверка результата. Жёсткие нарушения -> ok=false (повтор запроса).
 // Мягкие (summary длиннее 20 слов) -> исправляются и пишутся в warnings.
-// Бизнес-правило needs_human применяется поверх ответа модели.
+// needs_human здесь — как ответила модель; звать ли человека, решают правила
+// поверх ответа (src/lib/escalation.js, нода «Правила поверх ответа»).
 function validateTriage(obj) {
   const errors = [];
   const warnings = [];
@@ -132,8 +135,6 @@ function validateTriage(obj) {
 
   if (errors.length) return { ok: false, errors, warnings, value: null };
 
-  const needsHuman = obj.needs_human === true || obj.category === 'complaint' || conf < 0.6;
-  if (needsHuman !== obj.needs_human) warnings.push('needs_human выставлен правилом');
   return {
     ok: true,
     errors,
@@ -145,7 +146,7 @@ function validateTriage(obj) {
       budget_rub: budget,
       summary,
       next_step: nextStep,
-      needs_human: needsHuman,
+      needs_human: obj.needs_human,
       confidence: Math.round(conf * 100) / 100,
     },
   };
