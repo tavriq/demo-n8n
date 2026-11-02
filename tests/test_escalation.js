@@ -171,7 +171,15 @@ t('контроль: жалоба по-прежнему у менеджера, �
       if (fake) fake.stop();
     }
     try {
-      for (const r of rs) assert.equal(r.http_status, 200, 'HTTP ' + r.http_status + ' ' + JSON.stringify(r.response).slice(0, 200));
+      for (const r of rs) {
+        assert.equal(r.http_status, 200, 'HTTP ' + r.http_status + ' ' + JSON.stringify(r.response).slice(0, 200));
+        // заглушка модели не ответила — это поломка теста, а не ошибка правил: так и сказать
+        if (!x.mock) {
+          const a = r.response.meta.trace.attempts;
+          assert.equal(r.response.mode, 'llm', 'заглушка модели (tests/fake_openai.js) не дала ответ: '
+            + JSON.stringify(a.map((t) => t.errors)));
+        }
+      }
       x.check(rs);
       console.log('ok   ' + x.name);
     } catch (e) {

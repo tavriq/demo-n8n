@@ -60,6 +60,25 @@ function tableFilter(rows, filters, scope) {
   }));
 }
 
+// Запрос модулем http, а не fetch: глобального fetch нет в Node младше 18, а тесты
+// запускаются и на рабочей машине (scripts/deploy.sh).
+function sendHttp(url, { method, headers, body, timeout }) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const lib = u.protocol === 'https:' ? require('https') : http;
+    const data = body == null ? '' : String(body);
+    const req = lib.request(u, { method, headers: { ...headers, 'content-length': Buffer.byteLength(data) } }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { text += c; });
+      res.on('end', () => resolve({ status: res.statusCode, statusText: res.statusMessage, headers: res.headers, text }));
+    });
+    req.setTimeout(timeout, () => req.destroy(new Error('таймаут ' + timeout + ' мс')));
+    req.on('error', reject);
+    req.end(data);
+  });
+}
+
 async function httpNode(node, items, scope0) {
   const p = node.parameters;
   const out = [];
@@ -69,13 +88,12 @@ async function httpNode(node, items, scope0) {
     const headers = { 'content-type': 'application/json' };
     for (const h of (p.headerParameters && p.headerParameters.parameters) || []) headers[h.name] = evalExpr(h.value, scope);
     try {
-      const r = await fetch(url, { method: p.method, headers, body: evalExpr(p.jsonBody, scope),
-        signal: AbortSignal.timeout((p.options && p.options.timeout) || 30000) });
-      const text = await r.text();
+      const r = await sendHttp(url, { method: p.method, headers, body: evalExpr(p.jsonBody, scope),
+        timeout: (p.options && p.options.timeout) || 30000 });
       let body;
-      try { body = JSON.parse(text); } catch (e) { body = text; }
+      try { body = JSON.parse(r.text); } catch (e) { body = r.text; }
       // fullResponse + neverError: тело, заголовки и код, без исключения на 4xx/5xx
-      out.push({ json: { body, headers: Object.fromEntries(r.headers), statusCode: r.status, statusMessage: r.statusText } });
+      out.push({ json: { body, headers: r.headers, statusCode: r.status, statusMessage: r.statusText } });
     } catch (e) {
       if (node.onError !== 'continueRegularOutput') throw e;
       out.push({ json: { error: { message: String(e.message || e) } } });
