@@ -254,7 +254,7 @@ def summarize(rows, cases, aborted, args, started, cases_sha):
         "reasoning_effort_seen": sorted({r.get("reasoning_effort") for r in ok if r.get("reasoning_effort")}),
         "gateway": args.gateway or None,
         "n8n_version": args.n8n_version,
-        "cases_file": "evals/cases.jsonl",
+        "cases_file": getattr(args, "cases_label", "evals/cases.jsonl"),
         "cases_sha256": cases_sha,
         "cases_total": len(cases),
         "cases_sent": len(rows),
@@ -481,6 +481,11 @@ def main():
         print("EVAL_BYPASS_TOKEN не найден: без него сработает лимит 5 заявок в час и прогон остановится.",
               file=sys.stderr)
     raw = Path(args.cases).read_bytes()
+    cases_path = Path(args.cases).resolve()
+    try:
+        args.cases_label = str(cases_path.relative_to(ROOT.parent))
+    except ValueError:
+        args.cases_label = str(cases_path)
     cases = [json.loads(l) for l in raw.decode("utf-8").splitlines() if l.strip()]
     started = dt.datetime.now(dt.timezone.utc)
 
@@ -493,6 +498,9 @@ def main():
         stem += "-" + re.sub(r"[^A-Za-z0-9.]+", "-", s["models_seen"][0].split("/")[-1]).strip("-")
         if s["reasoning_effort_seen"]:
             stem += "-" + "-".join(s["reasoning_effort_seen"])
+    # другой набор кейсов — свой файл: прогон основного набора за тот же день не затирается
+    if cases_path.name != "cases.jsonl":
+        stem += "-" + re.sub(r"[^A-Za-z0-9.]+", "-", cases_path.stem).strip("-")
     name = stem + ".json"
     (out / name).write_text(json.dumps({"summary": s, "rows": rows}, ensure_ascii=False, indent=2) + "\n",
                             encoding="utf-8")

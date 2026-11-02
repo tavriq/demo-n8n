@@ -14,6 +14,7 @@ python3 "$ROOT/evals/run.py" --self-test
 if command -v node >/dev/null 2>&1; then
   node "$ROOT/tests/test_lib.js"
   node "$ROOT/tests/test_nodes.js"
+  node "$ROOT/tests/test_escalation.js"
   node "$ROOT/tests/check_workflows.js"
   node "$ROOT/scripts/build_sandbox.js" --check
 fi

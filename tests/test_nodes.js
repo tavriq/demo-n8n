@@ -185,6 +185,51 @@ t('Ответ: трасса mock — без попыток модели, в об
   assert.equal(tr.route.to, 'queue');
   assert.equal(tr.limits.ip_used, null, 'прогоны evals лимит с адреса не тратят');
 });
+t('Правила поверх ответа: между проверкой ответа (или заглушкой) и «Итогом», на каждом пути', () => {
+  const into = (name) => Object.entries(core.connections)
+    .filter(([, o]) => o.main.some((out) => out.some((x) => x.node === name))).map(([src]) => src).sort();
+  assert.deepEqual(into('Правила поверх ответа'), ['Mock-классификатор', 'Ответ валиден?', 'Проверка ответа #2']);
+  assert.deepEqual(core.connections['Ответ валиден?'].main[0].map((x) => x.node), ['Правила поверх ответа'], 'валидный ответ — в правила');
+  assert.deepEqual(into('Итог'), ['Правила поверх ответа']);
+});
+t('Правила поверх ответа: поводы и поправки, флаг модели подписан по режиму', () => {
+  const base = { text_masked: 'Здравствуйте', triage: { category: 'other', urgency: 'normal', city: null, budget_rub: null,
+    summary: 'Приветствие', next_step: 'Уточнить', needs_human: false, confidence: 0.98 } };
+  let r = run(core, 'Правила поверх ответа', { input: [{ ...base, result_mode: 'llm' }] })[0];
+  assert.equal(r.triage.needs_human, true);
+  assert.deepEqual(r.rules.reasons.map((x) => x.code), ['no_substance']);
+  assert.deepEqual(r.rules.warnings, ['needs_human выставлен правилом']);
+  assert.equal(r.rules.model_needs_human, false);
+  r = run(core, 'Правила поверх ответа', { input: [{ ...base, result_mode: 'mock', text_masked: 'Нужен ремонт кофемашины',
+    triage: { ...base.triage, category: 'repair', needs_human: true } }] })[0];
+  assert.deepEqual(r.rules.reasons.map((x) => x.text), ['заглушка отметила «нужен человек»']);
+  r = run(core, 'Правила поверх ответа', { input: [{ ...base, result_mode: 'llm_fallback', text_masked: 'Нужен ремонт кофемашины',
+    triage: { ...base.triage, needs_human: true } }] })[0];
+  assert.equal(r.triage.needs_human, true);
+  assert.deepEqual(r.rules.reasons, [], 'у заглушки после двух неудач повод пишет «Ответ: результат»');
+});
+t('Ответ: поводы правил — в трассе и на странице формы; confidence поводом не бывает', () => {
+  const triage = { category: 'other', urgency: 'normal', city: null, budget_rub: null, summary: 'Приветствие',
+    next_step: 'Уточнить', needs_human: true, confidence: 0.98 };
+  const row = run(core, 'Итог', { input: [{ ...ctxFinal, text_masked: 'Здравствуйте', triage }] })[0];
+  const guard = { tokens_today: 0, daily_token_budget: 200000, t_start: 1, t_masked: 2, t_guard: 3, bypass_hourly: true };
+  const rules = { rules: { reasons: [{ code: 'no_substance', text: 'нет сути: только приветствие или контакты' }],
+    fixes: [], warnings: ['needs_human выставлен правилом'] } };
+  const c1 = { valid: true, warnings: [], errors_1: [], raw_1: '{}', t_llm1: 4, t_check1: 5 };
+  let r = run(core, 'Ответ: результат', { nodes: { 'Итог': [row], 'Cost guard': [guard], 'Проверка ответа #1': [c1],
+    'Правила поверх ответа': [rules] } })[0];
+  const tr = r.response.meta.trace;
+  assert.equal(tr.route.to, 'manager');
+  assert.deepEqual(tr.route.reasons, ['нет сути: только приветствие или контакты']);
+  assert.deepEqual(tr.route.checks, ['no_substance']);
+  assert.deepEqual(tr.check.warnings, ['needs_human выставлен правилом']);
+  assert.match(r.form_message, /Нужен человек: да — нет сути/);
+  const calm = run(core, 'Итог', { input: [{ ...ctxFinal, triage: { ...triage, category: 'installation', needs_human: false, confidence: 0.3 } }] })[0];
+  r = run(core, 'Ответ: результат', { nodes: { 'Итог': [calm], 'Cost guard': [guard], 'Проверка ответа #1': [c1],
+    'Правила поверх ответа': [{ rules: { reasons: [], fixes: [], warnings: [] } }] } })[0];
+  assert.equal(r.response.meta.trace.route.to, 'queue');
+  assert.deepEqual(r.response.meta.trace.route.reasons, []);
+});
 t('Отказ: счётчик лимита с адреса не растёт', () => {
   const c = { ...ctxBase, decision: 'rate_limited_ip', http_status: 429, ip_requests_last_hour: 5, limit_ip_hour: 5 };
   const r = run(core, 'Отказ', { input: [c] })[0];
