@@ -129,26 +129,29 @@ textarea {
 .banner { border-radius: 8px; padding: 10px 14px; margin: 10px 0 0; }
 .banner-error { border: 1px solid var(--error-border); background: var(--error-soft); }
 
-/* Схема: шесть шагов в ряд, на телефоне — столбиком */
+/* Схема: шесть шагов в ряд, уже 880 px — столбиком (в ряд «Маскировка» не влезает в карточку) */
 .flow {
+  --flow-gap: 24px;
   list-style: none;
   margin: 12px 0;
   padding: 0;
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 18px;
+  gap: var(--flow-gap);
 }
 .flow li { position: relative; }
+/* стрелка «>» — два борта повёрнутого квадрата; видимая часть — его правая половина, поэтому сдвиг -85%:
+   остриё по центру зазора, мимо рамки выбранного шага (outline 2 px + отступ 2 px) */
 .flow li + li::before {
   content: "";
   position: absolute;
-  left: -14px;
+  left: calc(var(--flow-gap) / -2);
   top: 50%;
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-top: 2px solid var(--border);
   border-right: 2px solid var(--border);
-  transform: translateY(-50%) rotate(45deg);
+  transform: translate(-85%, -50%) rotate(45deg);
 }
 .step {
   width: 100%;
@@ -178,7 +181,7 @@ textarea {
 .step.skip { border-style: dashed; opacity: 0.6; }
 @keyframes pulse { 50% { border-color: var(--border); } }
 
-@media (max-width: 640px) {
+@media (max-width: 880px) {
   .flow { grid-template-columns: 1fr; gap: 10px; }
   .flow li + li::before { display: none; }
   .step { min-height: 0; flex-direction: row; align-items: baseline; gap: 10px; }
